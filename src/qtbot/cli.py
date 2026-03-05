@@ -81,6 +81,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip private balance check (useful when credentials are unavailable locally).",
     )
+    check_parser.add_argument(
+        "--require-balances",
+        action="store_true",
+        help="Fail ndax-check if private balance retrieval cannot be completed.",
+    )
 
     return parser
 
@@ -126,6 +131,7 @@ def main(argv: list[str] | None = None) -> int:
             from_date=args.from_date,
             to_date=args.to_date,
             skip_balances=args.skip_balances,
+            require_balances=args.require_balances,
         )
 
     print(f"Unknown command: {command}", file=sys.stderr)
@@ -298,6 +304,7 @@ def _handle_ndax_check(
     from_date: str,
     to_date: str,
     skip_balances: bool,
+    require_balances: bool,
 ) -> int:
     if interval <= 0:
         print("--interval must be > 0", file=sys.stderr)
@@ -326,14 +333,20 @@ def _handle_ndax_check(
         )
 
         balance_section: dict[str, object] | None = None
+        balance_skipped_reason: str | None = None
         if not skip_balances:
-            credentials = load_credentials_from_env()
-            account_id, balances = client.fetch_balances(credentials=credentials)
-            balance_section = {
-                "account_id": account_id,
-                "balance_count": len(balances),
-                "cad_available": _extract_asset_available(balances, "CAD"),
-            }
+            try:
+                credentials = load_credentials_from_env()
+                account_id, balances = client.fetch_balances(credentials=credentials)
+                balance_section = {
+                    "account_id": account_id,
+                    "balance_count": len(balances),
+                    "cad_available": _extract_asset_available(balances, "CAD"),
+                }
+            except NdaxAuthenticationError as exc:
+                if require_balances:
+                    raise
+                balance_skipped_reason = str(exc)
     except (NdaxAuthenticationError, NdaxError, ValueError) as exc:
         print(f"NDAX check failed: {exc}", file=sys.stderr)
         return 1
@@ -355,7 +368,8 @@ def _handle_ndax_check(
             "last_candle": candles[-1] if candles else None,
         },
         "balance_check": balance_section,
-        "balance_check_skipped": skip_balances,
+        "balance_check_skipped": skip_balances or balance_section is None,
+        "balance_check_skipped_reason": balance_skipped_reason if balance_section is None else None,
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
