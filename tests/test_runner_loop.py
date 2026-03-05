@@ -164,6 +164,58 @@ class RunnerLoopTests(unittest.TestCase):
                 with self.assertRaises(NdaxError):
                     BotRunner(config=cfg, budget_cad=1000.0).run()
 
+    def test_runner_honors_pre_cycle_risk_pause(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = make_runtime_config(Path(td), enable_live_trading=True)
+            logger = logging.getLogger("runner-test-risk-pause")
+            if not logger.handlers:
+                logger.addHandler(logging.NullHandler())
+
+            control_states = [
+                ControlState(command=Command.RUN, updated_at_utc=None, updated_by=None, reason=None),
+                ControlState(command=Command.STOP, updated_at_utc=None, updated_by=None, reason=None),
+            ]
+
+            with mock.patch("qtbot.runner.configure_logging", return_value=logger), mock.patch(
+                "qtbot.runner.StateStore", _FakeStateStore
+            ), mock.patch("qtbot.runner.NdaxClient", return_value=mock.Mock()), mock.patch(
+                "qtbot.runner.DecisionCsvLogger", return_value=mock.Mock()
+            ), mock.patch(
+                "qtbot.runner.TradeCsvLogger", return_value=mock.Mock()
+            ), mock.patch(
+                "qtbot.runner.StrategyEngine", return_value=mock.Mock()
+            ) as strategy_cls, mock.patch(
+                "qtbot.runner.LiveExecutionEngine", return_value=mock.Mock()
+            ) as execution_cls, mock.patch(
+                "qtbot.runner.StartupReconciler"
+            ) as reconciler_cls, mock.patch(
+                "qtbot.runner.GoLivePreflight"
+            ) as preflight_cls, mock.patch(
+                "qtbot.runner.RiskManager"
+            ) as risk_cls, mock.patch(
+                "qtbot.runner.signal.signal"
+            ), mock.patch(
+                "qtbot.runner.read_control", side_effect=control_states
+            ), mock.patch(
+                "qtbot.runner.write_control", return_value=control_states[0]
+            ):
+                reconciler_cls.return_value.reconcile.return_value = mock.Mock(
+                    message="reconciliation_complete"
+                )
+                preflight_cls.return_value.run.return_value = PreflightSummary(
+                    checks=[PreflightCheckResult(name="ok", passed=True, detail="ok")],
+                    message="go_live_preflight_passed checks=6",
+                )
+                risk_cls.return_value.enforce_pre_cycle.return_value = mock.Mock(
+                    triggered=True,
+                    reason="daily_loss_cap_breached",
+                )
+                result = BotRunner(config=cfg, budget_cad=1000.0).run()
+
+            self.assertEqual(result.loop_count, 1)
+            strategy_cls.return_value.evaluate_cycle.assert_not_called()
+            execution_cls.return_value.execute_decisions.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

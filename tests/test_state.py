@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -206,6 +207,49 @@ class StateStoreTests(unittest.TestCase):
 
             capped_again = store.cap_bot_cash(max_cash_cad=200.0, reason="test")
             self.assertFalse(capped_again)
+
+    def test_risk_state_daily_pnl_and_error_counters(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "state.sqlite"
+            store = StateStore(db_path)
+            store.initialize(initial_budget_cad=1000.0)
+
+            day1 = datetime(2026, 3, 5, 0, 0, tzinfo=timezone.utc)
+            self.assertEqual(store.get_daily_realized_pnl(now_utc=day1), 0.0)
+            self.assertEqual(store.get_consecutive_error_count(now_utc=day1), 0)
+
+            count = store.increment_consecutive_errors(
+                now_utc=day1,
+                by_count=2,
+                reason="test",
+            )
+            self.assertEqual(count, 2)
+            self.assertEqual(store.get_consecutive_error_count(now_utc=day1), 2)
+            self.assertTrue(store.reset_consecutive_errors(now_utc=day1, reason="clear"))
+            self.assertEqual(store.get_consecutive_error_count(now_utc=day1), 0)
+
+            store.apply_buy_fill(
+                symbol="SOL",
+                qty=1.0,
+                avg_price=100.0,
+                fee_cad=0.4,
+                filled_at_utc="2026-03-05T00:00:00+00:00",
+                order_id=1,
+                ndax_symbol="SOLCAD",
+            )
+            store.apply_sell_fill(
+                symbol="SOL",
+                qty=1.0,
+                avg_price=120.0,
+                fee_cad=0.48,
+                filled_at_utc="2026-03-05T01:00:00+00:00",
+                order_id=2,
+                ndax_symbol="SOLCAD",
+            )
+            self.assertGreater(store.get_daily_realized_pnl(now_utc=day1), 0.0)
+
+            day2 = datetime(2026, 3, 6, 0, 0, tzinfo=timezone.utc)
+            self.assertEqual(store.get_daily_realized_pnl(now_utc=day2), 0.0)
 
 
 if __name__ == "__main__":

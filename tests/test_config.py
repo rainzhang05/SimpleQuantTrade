@@ -37,6 +37,9 @@ class RuntimeConfigTests(unittest.TestCase):
                         "QTBOT_ORDER_STATUS_POLL_SECONDS=1.5",
                         "QTBOT_ORDER_STATUS_MAX_ATTEMPTS=9",
                         "QTBOT_PREFLIGHT_MIN_WARMUP_COVERAGE=0.9",
+                        "QTBOT_DAILY_LOSS_CAP_CAD=300",
+                        "QTBOT_MAX_SLIPPAGE_PCT=0.03",
+                        "QTBOT_CONSECUTIVE_ERROR_LIMIT=4",
                     ]
                 ),
                 encoding="utf-8",
@@ -52,6 +55,9 @@ class RuntimeConfigTests(unittest.TestCase):
             self.assertEqual(cfg.order_status_poll_seconds, 1.5)
             self.assertEqual(cfg.order_status_max_attempts, 9)
             self.assertEqual(cfg.preflight_min_warmup_coverage, 0.9)
+            self.assertEqual(cfg.daily_loss_cap_cad, 300.0)
+            self.assertEqual(cfg.max_slippage_pct, 0.03)
+            self.assertEqual(cfg.consecutive_error_limit, 4)
             self.assertEqual(cfg.runtime_dir, (root / "test_runtime").resolve())
 
     def test_invalid_bool_raises_value_error(self) -> None:
@@ -74,6 +80,17 @@ class RuntimeConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             (root / ".env").write_text("QTBOT_PREFLIGHT_MIN_WARMUP_COVERAGE=0\n", encoding="utf-8")
+            with pushd(root), mock.patch.dict(os.environ, {}, clear=True):
+                with self.assertRaises(ValueError):
+                    load_runtime_config()
+
+    def test_invalid_risk_values_raise(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / ".env").write_text(
+                "QTBOT_DAILY_LOSS_CAP_CAD=0\nQTBOT_MAX_SLIPPAGE_PCT=1\nQTBOT_CONSECUTIVE_ERROR_LIMIT=0\n",
+                encoding="utf-8",
+            )
             with pushd(root), mock.patch.dict(os.environ, {}, clear=True):
                 with self.assertRaises(ValueError):
                     load_runtime_config()

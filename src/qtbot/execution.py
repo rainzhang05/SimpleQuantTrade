@@ -29,6 +29,8 @@ class ExecutionSummary:
     exit_filled: int
     skipped: int
     failed: int
+    slippage_breaches: int
+    max_slippage_seen: float
     message: str
 
 
@@ -65,6 +67,8 @@ class LiveExecutionEngine:
                 exit_filled=0,
                 skipped=0,
                 failed=0,
+                slippage_breaches=0,
+                max_slippage_seen=0.0,
                 message="execution_disabled_dry_run",
             )
 
@@ -81,6 +85,9 @@ class LiveExecutionEngine:
         failed = 0
         enter_filled = 0
         exit_filled = 0
+        slippage_breaches = 0
+        max_slippage_seen = 0.0
+        slippage_guard_triggered = False
 
         exit_decisions = [item for item in decisions if item.signal == "EXIT"]
         exit_decisions.sort(key=lambda item: item.symbol)
@@ -91,6 +98,8 @@ class LiveExecutionEngine:
                     exit_filled=exit_filled,
                     skipped=skipped,
                     failed=failed,
+                    slippage_breaches=slippage_breaches,
+                    max_slippage_seen=max_slippage_seen,
                     message="execution_interrupted_by_control",
                 )
 
@@ -126,6 +135,26 @@ class LiveExecutionEngine:
                 ndax_available_cad += (fill.qty * fill.avg_price) - fill.fee_cad
                 available_by_asset[entry.ticker] = max(0.0, exchange_available_qty - fill.qty)
                 positions[entry.ticker] = self._state_store.get_positions().get(entry.ticker, empty_position(entry.ticker))
+                slippage = _compute_slippage_pct(
+                    side="SELL",
+                    reference_price=decision.close,
+                    fill_price=fill.avg_price,
+                )
+                if slippage > self._config.max_slippage_pct:
+                    slippage_breaches += 1
+                    max_slippage_seen = max(max_slippage_seen, slippage)
+                    failed += 1
+                    slippage_guard_triggered = True
+                    self._logger.error(
+                        "Slippage guard breached on SELL symbol=%s fill_price=%.12g reference_price=%.12g "
+                        "slippage_pct=%.6g allowed_pct=%.6g",
+                        entry.ndax_symbol,
+                        fill.avg_price,
+                        decision.close,
+                        slippage,
+                        self._config.max_slippage_pct,
+                    )
+                    break
             except NdaxError:
                 failed += 1
                 self._logger.error(
@@ -134,6 +163,22 @@ class LiveExecutionEngine:
                     entry.ticker,
                     exc_info=True,
                 )
+
+        if slippage_guard_triggered:
+            message = (
+                f"execution_complete enter_filled={enter_filled} exit_filled={exit_filled} "
+                f"skipped={skipped} failed={failed} slippage_breaches={slippage_breaches} "
+                f"max_slippage_seen={max_slippage_seen:.6g}"
+            )
+            return ExecutionSummary(
+                enter_filled=enter_filled,
+                exit_filled=exit_filled,
+                skipped=skipped,
+                failed=failed,
+                slippage_breaches=slippage_breaches,
+                max_slippage_seen=max_slippage_seen,
+                message=message,
+            )
 
         enter_decisions = [item for item in decisions if item.signal == "ENTER"]
         enter_decisions.sort(key=lambda item: (-(item.score or 0.0), item.symbol))
@@ -144,6 +189,8 @@ class LiveExecutionEngine:
                     exit_filled=exit_filled,
                     skipped=skipped,
                     failed=failed,
+                    slippage_breaches=slippage_breaches,
+                    max_slippage_seen=max_slippage_seen,
                     message="execution_interrupted_by_control",
                 )
 
@@ -191,6 +238,26 @@ class LiveExecutionEngine:
                 ndax_available_cad -= (fill.qty * fill.avg_price) + fill.fee_cad
                 available_by_asset[entry.ticker] = available_by_asset.get(entry.ticker, 0.0) + fill.qty
                 positions[entry.ticker] = self._state_store.get_positions().get(entry.ticker, empty_position(entry.ticker))
+                slippage = _compute_slippage_pct(
+                    side="BUY",
+                    reference_price=decision.close,
+                    fill_price=fill.avg_price,
+                )
+                if slippage > self._config.max_slippage_pct:
+                    slippage_breaches += 1
+                    max_slippage_seen = max(max_slippage_seen, slippage)
+                    failed += 1
+                    slippage_guard_triggered = True
+                    self._logger.error(
+                        "Slippage guard breached on BUY symbol=%s fill_price=%.12g reference_price=%.12g "
+                        "slippage_pct=%.6g allowed_pct=%.6g",
+                        entry.ndax_symbol,
+                        fill.avg_price,
+                        decision.close,
+                        slippage,
+                        self._config.max_slippage_pct,
+                    )
+                    break
             except NdaxError:
                 failed += 1
                 self._logger.error(
@@ -202,13 +269,16 @@ class LiveExecutionEngine:
 
         message = (
             f"execution_complete enter_filled={enter_filled} exit_filled={exit_filled} "
-            f"skipped={skipped} failed={failed}"
+            f"skipped={skipped} failed={failed} slippage_breaches={slippage_breaches} "
+            f"max_slippage_seen={max_slippage_seen:.6g}"
         )
         return ExecutionSummary(
             enter_filled=enter_filled,
             exit_filled=exit_filled,
             skipped=skipped,
             failed=failed,
+            slippage_breaches=slippage_breaches,
+            max_slippage_seen=max_slippage_seen,
             message=message,
         )
 
@@ -317,3 +387,13 @@ class LiveExecutionEngine:
     def _next_client_order_id(self) -> int:
         self._client_order_seq = max(self._client_order_seq + 1, int(time.time() * 1000))
         return self._client_order_seq
+
+
+def _compute_slippage_pct(*, side: OrderSide, reference_price: float, fill_price: float) -> float:
+    if reference_price <= 0 or fill_price <= 0:
+        return 0.0
+    if side == "BUY":
+        raw = (fill_price - reference_price) / reference_price
+    else:
+        raw = (reference_price - fill_price) / reference_price
+    return max(0.0, raw)

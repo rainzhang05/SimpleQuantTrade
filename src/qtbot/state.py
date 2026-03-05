@@ -16,6 +16,10 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def utc_today_iso() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+
 class StateStore:
     """Provides transactional reads/writes for runtime state."""
 
@@ -25,6 +29,7 @@ class StateStore:
     def initialize(self, *, initial_budget_cad: float) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         now = utc_now_iso()
+        today = utc_today_iso()
 
         with self._connect() as conn:
             self._apply_schema(conn)
@@ -75,14 +80,30 @@ class StateStore:
                     event_type="STATE_INITIALIZED",
                     detail=f"initial_budget_cad={initial_budget_cad:.2f}",
                 )
-                return
+            else:
+                existing_budget = float(row["initial_budget_cad"])
+                if abs(existing_budget - initial_budget_cad) > 1e-9:
+                    raise ValueError(
+                        "Existing state uses a different initial budget. "
+                        f"existing={existing_budget:.2f} requested={initial_budget_cad:.2f}"
+                    )
 
-            existing_budget = float(row["initial_budget_cad"])
-            if abs(existing_budget - initial_budget_cad) > 1e-9:
-                raise ValueError(
-                    "Existing state uses a different initial budget. "
-                    f"existing={existing_budget:.2f} requested={initial_budget_cad:.2f}"
-                )
+            realized_row = conn.execute(
+                """
+                SELECT realized_pnl_cad
+                FROM bot_state
+                WHERE id = 1
+                """
+            ).fetchone()
+            if realized_row is None:
+                raise ValueError("bot_state row missing.")
+            realized_pnl_cad = float(realized_row["realized_pnl_cad"])
+            self._ensure_risk_state_row(
+                conn,
+                today=today,
+                realized_pnl_cad=realized_pnl_cad,
+                now=now,
+            )
 
     def set_status(self, *, run_status: str, last_command: str, event_detail: str) -> None:
         now = utc_now_iso()
@@ -160,7 +181,10 @@ class StateStore:
                     last_loop_started_at_utc,
                     last_loop_completed_at_utc,
                     last_event,
-                    updated_at_utc
+                    updated_at_utc,
+                    (SELECT daily_anchor_date_utc FROM risk_state WHERE id = 1) AS risk_day_utc,
+                    (SELECT daily_realized_anchor_cad FROM risk_state WHERE id = 1) AS risk_daily_anchor_cad,
+                    (SELECT consecutive_error_count FROM risk_state WHERE id = 1) AS risk_consecutive_error_count
                 FROM bot_state
                 WHERE id = 1
                 """
@@ -539,6 +563,130 @@ class StateStore:
         with self._connect() as conn:
             self._insert_event(conn, event_type=event_type, detail=detail)
 
+    def get_daily_realized_pnl(self, *, now_utc: datetime) -> float:
+        now = now_utc.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+        today = now_utc.astimezone(timezone.utc).date().isoformat()
+        with self._connect() as conn:
+            realized_pnl_cad = self._load_realized_pnl_cad(conn)
+            anchor = self._ensure_risk_state_row(
+                conn,
+                today=today,
+                realized_pnl_cad=realized_pnl_cad,
+                now=now,
+            )
+            return realized_pnl_cad - anchor
+
+    def increment_consecutive_errors(
+        self,
+        *,
+        now_utc: datetime,
+        by_count: int,
+        reason: str,
+    ) -> int:
+        if by_count <= 0:
+            raise ValueError("by_count must be > 0.")
+        now = now_utc.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+        today = now_utc.astimezone(timezone.utc).date().isoformat()
+        with self._connect() as conn:
+            realized_pnl_cad = self._load_realized_pnl_cad(conn)
+            self._ensure_risk_state_row(
+                conn,
+                today=today,
+                realized_pnl_cad=realized_pnl_cad,
+                now=now,
+            )
+            conn.execute(
+                """
+                UPDATE risk_state
+                SET
+                    consecutive_error_count = consecutive_error_count + ?,
+                    updated_at_utc = ?
+                WHERE id = 1
+                """,
+                (by_count, now),
+            )
+            row = conn.execute(
+                """
+                SELECT consecutive_error_count
+                FROM risk_state
+                WHERE id = 1
+                """
+            ).fetchone()
+            if row is None:
+                raise ValueError("risk_state row missing.")
+            current_count = int(row["consecutive_error_count"])
+            self._insert_event(
+                conn,
+                event_type="RISK_ERROR_RECORDED",
+                detail=(
+                    f"count_added={by_count} consecutive_error_count={current_count} "
+                    f"reason={reason}"
+                ),
+            )
+            return current_count
+
+    def reset_consecutive_errors(self, *, now_utc: datetime, reason: str) -> bool:
+        now = now_utc.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+        today = now_utc.astimezone(timezone.utc).date().isoformat()
+        with self._connect() as conn:
+            realized_pnl_cad = self._load_realized_pnl_cad(conn)
+            self._ensure_risk_state_row(
+                conn,
+                today=today,
+                realized_pnl_cad=realized_pnl_cad,
+                now=now,
+            )
+            row = conn.execute(
+                """
+                SELECT consecutive_error_count
+                FROM risk_state
+                WHERE id = 1
+                """
+            ).fetchone()
+            if row is None:
+                raise ValueError("risk_state row missing.")
+            current_count = int(row["consecutive_error_count"])
+            if current_count <= 0:
+                return False
+            conn.execute(
+                """
+                UPDATE risk_state
+                SET
+                    consecutive_error_count = 0,
+                    updated_at_utc = ?
+                WHERE id = 1
+                """,
+                (now,),
+            )
+            self._insert_event(
+                conn,
+                event_type="RISK_ERRORS_RESET",
+                detail=f"previous_consecutive_error_count={current_count} reason={reason}",
+            )
+            return True
+
+    def get_consecutive_error_count(self, *, now_utc: datetime) -> int:
+        now = now_utc.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+        today = now_utc.astimezone(timezone.utc).date().isoformat()
+        with self._connect() as conn:
+            realized_pnl_cad = self._load_realized_pnl_cad(conn)
+            self._ensure_risk_state_row(
+                conn,
+                today=today,
+                realized_pnl_cad=realized_pnl_cad,
+                now=now,
+            )
+            row = conn.execute(
+                """
+                SELECT consecutive_error_count
+                FROM risk_state
+                WHERE id = 1
+                """
+            ).fetchone()
+            if row is None:
+                raise ValueError("risk_state row missing.")
+            return int(row["consecutive_error_count"])
+
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(self._db_path, timeout=30)
@@ -607,6 +755,17 @@ class StateStore:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS risk_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                daily_anchor_date_utc TEXT NOT NULL,
+                daily_realized_anchor_cad REAL NOT NULL,
+                consecutive_error_count INTEGER NOT NULL DEFAULT 0,
+                updated_at_utc TEXT NOT NULL
+            )
+            """
+        )
 
     def _read_position(self, conn: sqlite3.Connection, *, symbol: str) -> PositionSnapshot:
         row = conn.execute(
@@ -654,3 +813,93 @@ class StateStore:
             """,
             (utc_now_iso(), event_type, detail),
         )
+
+    def _load_realized_pnl_cad(self, conn: sqlite3.Connection) -> float:
+        row = conn.execute(
+            """
+            SELECT realized_pnl_cad
+            FROM bot_state
+            WHERE id = 1
+            """
+        ).fetchone()
+        if row is None:
+            raise ValueError("bot_state row missing.")
+        return float(row["realized_pnl_cad"])
+
+    def _ensure_risk_state_row(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        today: str,
+        realized_pnl_cad: float,
+        now: str,
+    ) -> float:
+        row = conn.execute(
+            """
+            SELECT daily_anchor_date_utc, daily_realized_anchor_cad, consecutive_error_count
+            FROM risk_state
+            WHERE id = 1
+            """
+        ).fetchone()
+        if row is None:
+            conn.execute(
+                """
+                INSERT INTO risk_state (
+                    id,
+                    daily_anchor_date_utc,
+                    daily_realized_anchor_cad,
+                    consecutive_error_count,
+                    updated_at_utc
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    1,
+                    today,
+                    realized_pnl_cad,
+                    0,
+                    now,
+                ),
+            )
+            self._insert_event(
+                conn,
+                event_type="RISK_STATE_INITIALIZED",
+                detail=(
+                    f"date={today} daily_realized_anchor_cad={realized_pnl_cad:.12g} "
+                    "consecutive_error_count=0"
+                ),
+            )
+            return realized_pnl_cad
+
+        anchor_date = str(row["daily_anchor_date_utc"])
+        anchor_value = float(row["daily_realized_anchor_cad"])
+        if anchor_date == today:
+            return anchor_value
+
+        previous_count = int(row["consecutive_error_count"])
+        conn.execute(
+            """
+            UPDATE risk_state
+            SET
+                daily_anchor_date_utc = ?,
+                daily_realized_anchor_cad = ?,
+                consecutive_error_count = 0,
+                updated_at_utc = ?
+            WHERE id = 1
+            """,
+            (
+                today,
+                realized_pnl_cad,
+                now,
+            ),
+        )
+        self._insert_event(
+            conn,
+            event_type="RISK_DAY_ROLLOVER",
+            detail=(
+                f"new_date={today} new_anchor={realized_pnl_cad:.12g} "
+                f"previous_date={anchor_date} previous_anchor={anchor_value:.12g} "
+                f"previous_consecutive_error_count={previous_count}"
+            ),
+        )
+        return realized_pnl_cad

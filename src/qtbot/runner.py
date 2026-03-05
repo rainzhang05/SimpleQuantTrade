@@ -17,6 +17,7 @@ from qtbot.execution import LiveExecutionEngine
 from qtbot.logging_setup import configure_logging
 from qtbot.ndax_client import NdaxAuthenticationError, NdaxClient, NdaxError
 from qtbot.preflight import GoLivePreflight
+from qtbot.risk import RiskManager
 from qtbot.reconciliation import StartupReconciler
 from qtbot.state import StateStore
 from qtbot.strategy.engine import StrategyEngine
@@ -118,6 +119,12 @@ class BotRunner:
                 ndax_client=ndax_client,
                 state_store=state_store,
                 trade_logger=trade_logger,
+                logger=logger,
+            )
+            risk_manager = RiskManager(
+                config=self._config,
+                state_store=state_store,
+                control_file=self._config.control_file,
                 logger=logger,
             )
             reconciler = StartupReconciler(
@@ -254,6 +261,22 @@ class BotRunner:
                 loop_started_dt = datetime.now(timezone.utc)
                 loop_started_at = loop_started_dt.replace(microsecond=0).isoformat()
                 event_detail = "cycle_completed"
+                if self._config.enable_live_trading:
+                    pre_cycle_risk = risk_manager.enforce_pre_cycle(now_utc=loop_started_dt)
+                    if pre_cycle_risk.triggered:
+                        event_detail = f"risk_paused_before_cycle: {pre_cycle_risk.reason}"
+                        logger.warning("Risk guard paused before strategy cycle. %s", pre_cycle_risk.reason)
+                        loop_completed_at = utc_now_iso()
+                        loop_count = state_store.record_loop(
+                            last_command=Command.RUN.value,
+                            loop_started_at_utc=loop_started_at,
+                            loop_completed_at_utc=loop_completed_at,
+                            event_detail=event_detail,
+                        )
+                        logger.info("Loop persisted. loop_count=%s", loop_count)
+                        now_after = time.monotonic()
+                        next_loop_at = max(next_loop_at + self._config.cadence_seconds, now_after)
+                        continue
                 try:
                     summary = strategy_engine.evaluate_cycle(now_utc=loop_started_dt)
                     execution_summary = execution_engine.execute_decisions(
@@ -265,12 +288,51 @@ class BotRunner:
                     logger.info("Strategy cycle completed. %s", summary.message)
                     if self._config.enable_live_trading:
                         logger.info("Execution cycle completed. %s", execution_summary.message)
+                        slippage_action = risk_manager.handle_slippage_breach(
+                            now_utc=loop_started_dt,
+                            breach_count=execution_summary.slippage_breaches,
+                            max_slippage_seen=execution_summary.max_slippage_seen,
+                        )
+                        residual_errors = max(
+                            0,
+                            execution_summary.failed - execution_summary.slippage_breaches,
+                        )
+                        error_action = risk_manager.record_cycle_errors(
+                            now_utc=loop_started_dt,
+                            error_count=residual_errors,
+                            reason=f"execution_cycle_failed_count={residual_errors}",
+                        )
+                        if execution_summary.failed <= 0 and execution_summary.slippage_breaches <= 0:
+                            risk_manager.record_cycle_success(
+                                now_utc=loop_started_dt,
+                                reason="execution_cycle_success",
+                            )
+                        if slippage_action.triggered and slippage_action.reason:
+                            event_detail = f"{event_detail}; {slippage_action.reason}"
+                        if error_action.triggered and error_action.reason:
+                            event_detail = f"{event_detail}; {error_action.reason}"
                 except NdaxError as exc:
                     event_detail = f"cycle_failed: {exc}"
                     logger.error("Cycle failed: %s", exc)
+                    if self._config.enable_live_trading:
+                        error_action = risk_manager.record_cycle_errors(
+                            now_utc=loop_started_dt,
+                            error_count=1,
+                            reason=event_detail,
+                        )
+                        if error_action.triggered and error_action.reason:
+                            event_detail = f"{event_detail}; {error_action.reason}"
                 except Exception as exc:  # pragma: no cover - defensive safety
                     event_detail = f"cycle_unexpected_error: {exc}"
                     logger.exception("Unexpected cycle failure: %s", exc)
+                    if self._config.enable_live_trading:
+                        error_action = risk_manager.record_cycle_errors(
+                            now_utc=loop_started_dt,
+                            error_count=1,
+                            reason=event_detail,
+                        )
+                        if error_action.triggered and error_action.reason:
+                            event_detail = f"{event_detail}; {error_action.reason}"
 
                 loop_completed_at = utc_now_iso()
                 loop_count = state_store.record_loop(

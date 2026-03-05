@@ -194,6 +194,67 @@ class ExecutionEngineTests(unittest.TestCase):
             self.assertEqual(len(state_store.sell_calls), 1)
             self.assertEqual(state_store.sell_calls[0]["symbol"], "SOL")
 
+    def test_live_mode_slippage_breach_stops_further_orders(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = make_runtime_config(
+                Path(td),
+                enable_live_trading=True,
+                min_order_notional_cad=10.0,
+                max_slippage_pct=0.01,
+            )
+            write_control(cfg.control_file, Command.RUN, updated_by="test", reason="run")
+            state_store = _FakeStateStore(300.0, {}, [], [])
+            client = _FakeNdaxClient([NdaxBalance("CAD", 300.0, 0.0)])
+            client.next_fill_qty = 1.0
+            client.next_fill_price = 120.0
+            engine = LiveExecutionEngine(
+                config=cfg,
+                ndax_client=client,
+                state_store=state_store,
+                trade_logger=TradeCsvLogger(cfg.runtime_dir / "logs" / "trades.csv"),
+                logger=self._logger(),
+            )
+            decisions = [
+                Decision(
+                    timestamp_utc="2026-03-05T00:00:00+00:00",
+                    symbol="SOLCAD",
+                    close=100.0,
+                    ema_fast=101.0,
+                    ema_slow=99.0,
+                    atr=2.0,
+                    signal="ENTER",
+                    reason="entry_conditions_met",
+                    score=0.02,
+                ),
+                Decision(
+                    timestamp_utc="2026-03-05T00:00:00+00:00",
+                    symbol="ADACAD",
+                    close=100.0,
+                    ema_fast=101.0,
+                    ema_slow=99.0,
+                    atr=2.0,
+                    signal="ENTER",
+                    reason="entry_conditions_met",
+                    score=0.01,
+                ),
+            ]
+            tradable = [
+                UniverseEntry(ticker="SOL", ndax_symbol="SOLCAD", instrument_id=99),
+                UniverseEntry(ticker="ADA", ndax_symbol="ADACAD", instrument_id=100),
+            ]
+
+            with mock.patch("qtbot.execution.load_credentials_from_env", return_value=mock.Mock()):
+                summary = engine.execute_decisions(
+                    now_utc=datetime.now(timezone.utc),
+                    decisions=decisions,
+                    tradable=tradable,
+                )
+
+            self.assertEqual(summary.slippage_breaches, 1)
+            self.assertGreaterEqual(summary.failed, 1)
+            self.assertEqual(len(client.send_calls), 1)
+            self.assertIn("slippage_breaches=1", summary.message)
+
 
 if __name__ == "__main__":
     unittest.main()

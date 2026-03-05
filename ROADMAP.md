@@ -371,6 +371,9 @@ Acceptance:
 - Max new entries per cycle: **3** (operational burst control; not a portfolio limit)
 - Fee: **0.4% per side**
 - Go-live preflight warmup coverage threshold: **0.8**
+- Daily loss cap: **250 CAD**
+- Max slippage guard: **2%**
+- Consecutive error kill-switch limit: **3**
 
 All defaults should be placed in a single config module/file.
 

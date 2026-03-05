@@ -42,6 +42,9 @@ class RuntimeConfig:
     order_status_poll_seconds: float
     order_status_max_attempts: int
     preflight_min_warmup_coverage: float
+    daily_loss_cap_cad: float
+    max_slippage_pct: float
+    consecutive_error_limit: int
 
 
 def load_runtime_config() -> RuntimeConfig:
@@ -110,6 +113,18 @@ def load_runtime_config() -> RuntimeConfig:
     if not (0 < preflight_min_warmup_coverage <= 1):
         raise ValueError("QTBOT_PREFLIGHT_MIN_WARMUP_COVERAGE must be in (0, 1].")
 
+    daily_loss_cap_cad = float(os.getenv("QTBOT_DAILY_LOSS_CAP_CAD", "250"))
+    if daily_loss_cap_cad <= 0:
+        raise ValueError("QTBOT_DAILY_LOSS_CAP_CAD must be > 0.")
+
+    max_slippage_pct = float(os.getenv("QTBOT_MAX_SLIPPAGE_PCT", "0.02"))
+    if not (0 < max_slippage_pct < 1):
+        raise ValueError("QTBOT_MAX_SLIPPAGE_PCT must be in (0, 1).")
+
+    consecutive_error_limit = int(os.getenv("QTBOT_CONSECUTIVE_ERROR_LIMIT", "3"))
+    if consecutive_error_limit <= 0:
+        raise ValueError("QTBOT_CONSECUTIVE_ERROR_LIMIT must be > 0.")
+
     runtime_dir = _resolve_runtime_dir(os.getenv("QTBOT_RUNTIME_DIR", "runtime"))
     return RuntimeConfig(
         cadence_seconds=cadence_seconds,
@@ -136,6 +151,9 @@ def load_runtime_config() -> RuntimeConfig:
         order_status_poll_seconds=order_status_poll_seconds,
         order_status_max_attempts=order_status_max_attempts,
         preflight_min_warmup_coverage=preflight_min_warmup_coverage,
+        daily_loss_cap_cad=daily_loss_cap_cad,
+        max_slippage_pct=max_slippage_pct,
+        consecutive_error_limit=consecutive_error_limit,
     )
 
 

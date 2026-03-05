@@ -36,6 +36,12 @@ Copy `.env.example` to `.env` and fill NDAX credentials before private API check
 - Live startup is blocked when any preflight check fails, and failed checks are logged explicitly in `runtime/logs/qtbot.log` and `state_events`.
 - Candle warm-up uses coverage gating with `QTBOT_PREFLIGHT_MIN_WARMUP_COVERAGE` (default `0.8`) so isolated symbols with sparse candles do not disable all live trading.
 
+## M7 Risk Hardening
+
+- Daily loss cap guard auto-pauses trading when daily realized PnL breaches `QTBOT_DAILY_LOSS_CAP_CAD`.
+- Slippage guard monitors realized fill-vs-signal slippage; breach of `QTBOT_MAX_SLIPPAGE_PCT` halts further orders for the cycle and pauses trading.
+- Consecutive execution/API errors are tracked in persistent state; if the count reaches `QTBOT_CONSECUTIVE_ERROR_LIMIT`, the bot auto-pauses.
+
 ## Testing and CI
 
 - Local test run:

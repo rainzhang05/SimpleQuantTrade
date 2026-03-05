@@ -259,6 +259,32 @@ M6 validation evidence:
 Exit criteria:
 - Safety conditions block unsafe execution paths reliably.
 
+M7 implementation status:
+- [x] Added dedicated risk module (`RiskManager`) for deterministic risk enforcement.
+- [x] Implemented daily loss cap guard:
+  - reads daily realized PnL from persistent state,
+  - auto-pauses trading when loss exceeds `QTBOT_DAILY_LOSS_CAP_CAD`.
+- [x] Implemented slippage guard:
+  - execution now computes realized slippage versus signal close for each fill,
+  - breaches of `QTBOT_MAX_SLIPPAGE_PCT` halt further orders in-cycle and trigger auto-pause.
+- [x] Implemented consecutive error kill-switch:
+  - persistent consecutive error counter tracked in `risk_state`,
+  - auto-pause when count reaches `QTBOT_CONSECUTIVE_ERROR_LIMIT`.
+- [x] Added persistent risk state schema and events:
+  - daily anchor rollover,
+  - error increments/resets,
+  - risk-triggered pause events.
+
+M7 validation evidence:
+- Compile check: `python3 -m compileall src` passed after M7 changes.
+- Unit/integration suite: `PYTHONPATH=src python3 -m unittest discover -s tests -p "test_*.py"` passed (`82` tests).
+- Coverage gate: `PYTHONPATH=src coverage run --source=src/qtbot -m unittest discover -s tests -p "test_*.py"` and `coverage report --show-missing --fail-under=85` passed at `86%`.
+- New M7 test coverage:
+  - `tests/test_risk.py` validates daily-loss, slippage, and error-limit pause actions.
+  - `tests/test_execution.py` validates slippage breach handling and in-cycle order halt behavior.
+  - `tests/test_state.py` validates risk-state persistence, daily anchor rollover, and error counter lifecycle.
+  - `tests/test_runner_loop.py` validates pre-cycle risk pause behavior in runner loop.
+
 ### M8: Logging and Discord Alerting
 - Finalize append-only runtime logs:
   - `runtime/logs/qtbot.log`
@@ -432,6 +458,9 @@ Defaults:
 - Fee model: 0.4% per side.
 - State store: `runtime/state.sqlite`.
 - Go-live warmup coverage threshold: `0.8`.
+- Daily loss cap (`QTBOT_DAILY_LOSS_CAP_CAD`): `250`.
+- Max slippage guard (`QTBOT_MAX_SLIPPAGE_PCT`): `0.02`.
+- Consecutive error kill-switch limit (`QTBOT_CONSECUTIVE_ERROR_LIMIT`): `3`.
 
 Documentation policy:
 - NDAX naming remains canonical in all docs.

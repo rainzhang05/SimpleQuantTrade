@@ -35,6 +35,9 @@ def make_runtime_config(tmp_path: Path, **overrides) -> RuntimeConfig:
         order_status_poll_seconds=0.01,
         order_status_max_attempts=3,
         preflight_min_warmup_coverage=0.8,
+        daily_loss_cap_cad=250.0,
+        max_slippage_pct=0.02,
+        consecutive_error_limit=3,
     )
     if overrides:
         return replace(cfg, **overrides)
