@@ -59,6 +59,17 @@ Exit criteria:
 - No stale legacy exchange/symbol references in core docs.
 - Credential contract standardized on `NDAX_API_KEY` / `NDAX_API_SECRET`.
 
+M0 implementation status:
+- [x] `README.md` updated to NDAX.
+- [x] `ROADMAP.md` updated to NDAX terms, credentials, client naming, and balance variable naming.
+- [x] `AGENTS.md` updated to NDAX API behavior wording.
+- [x] `PLAN.md` created and aligned with NDAX-first implementation phases.
+- [x] Cross-doc consistency checks executed and passed.
+
+M0 validation commands:
+- `rg -n "<legacy_exchange_terms>" README.md ROADMAP.md AGENTS.md PLAN.md` -> no matches.
+- `rg -n "NDAX_API_KEY|NDAX_API_SECRET|ndax_available_cad|ndax_client" README.md ROADMAP.md AGENTS.md PLAN.md` -> expected NDAX contract matches present.
+
 ### M1: CLI, Control Plane, and Persistence Skeleton
 - Implement CLI commands:
   - `qtbot start --budget <CAD>`
