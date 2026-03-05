@@ -340,6 +340,8 @@ Acceptance gates:
 - No prohibited asset trade path exists.
 - Restart/pause/stop cannot corrupt state.
 - Decisions and trades are fully traceable in logs.
+- Every phase change must include or update automated tests for new/modified behavior.
+- Every phase change must keep GitHub CI green (compile + test + coverage gates).
 
 ## 8) Rollout and Operations Runbook Checklist
 

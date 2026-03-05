@@ -162,6 +162,8 @@ The agent should ensure:
 - retry logic for network/API operations
 - safe persistence of state
 - deterministic trading behavior
+- automated tests for all newly implemented or modified behavior
+- phase-appropriate CI workflow updates so tests run on push/pull request
 
 The agent should avoid fragile implementations.
 

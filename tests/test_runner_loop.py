@@ -1,0 +1,94 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timezone
+import logging
+from pathlib import Path
+import tempfile
+import unittest
+from unittest import mock
+
+from qtbot.control import Command, ControlState
+from qtbot.runner import BotRunner
+from qtbot.strategy.engine import StrategySummary
+from tests._helpers import make_runtime_config
+
+
+class _FakeStateStore:
+    def __init__(self, *_args, **_kwargs) -> None:
+        self.loop_count = 0
+
+    def initialize(self, *, initial_budget_cad: float) -> None:
+        self.initial_budget_cad = initial_budget_cad
+
+    def set_status(self, *, run_status: str, last_command: str, event_detail: str) -> None:
+        self.last_status = (run_status, last_command, event_detail)
+
+    def record_loop(
+        self,
+        *,
+        last_command: str,
+        loop_started_at_utc: str,
+        loop_completed_at_utc: str,
+        event_detail: str,
+    ) -> int:
+        self.loop_count += 1
+        return self.loop_count
+
+
+class RunnerLoopTests(unittest.TestCase):
+    def test_runner_processes_single_cycle_then_stops(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = make_runtime_config(Path(td), cadence_seconds=1)
+            logger = logging.getLogger("runner-test")
+            if not logger.handlers:
+                logger.addHandler(logging.NullHandler())
+
+            strategy_summary = StrategySummary(
+                symbol_count=1,
+                enter_count=0,
+                exit_count=0,
+                hold_count=1,
+                skipped_count=0,
+                message="decisions_persisted symbols=1 enter=0 exit=0 hold=1 skipped=0",
+                decisions=[],
+                tradable=[],
+            )
+            fake_strategy = mock.Mock()
+            fake_strategy.evaluate_cycle.return_value = strategy_summary
+            fake_execution = mock.Mock()
+            fake_execution.execute_decisions.return_value = mock.Mock(
+                message="execution_disabled_dry_run"
+            )
+
+            control_states = [
+                ControlState(command=Command.RUN, updated_at_utc=None, updated_by=None, reason=None),
+                ControlState(command=Command.STOP, updated_at_utc=None, updated_by=None, reason=None),
+            ]
+
+            with mock.patch("qtbot.runner.configure_logging", return_value=logger), mock.patch(
+                "qtbot.runner.StateStore", _FakeStateStore
+            ), mock.patch("qtbot.runner.NdaxClient", return_value=mock.Mock()), mock.patch(
+                "qtbot.runner.DecisionCsvLogger", return_value=mock.Mock()
+            ), mock.patch(
+                "qtbot.runner.TradeCsvLogger", return_value=mock.Mock()
+            ), mock.patch(
+                "qtbot.runner.StrategyEngine", return_value=fake_strategy
+            ), mock.patch(
+                "qtbot.runner.LiveExecutionEngine", return_value=fake_execution
+            ), mock.patch(
+                "qtbot.runner.read_control", side_effect=control_states
+            ), mock.patch(
+                "qtbot.runner.write_control", return_value=control_states[0]
+            ), mock.patch(
+                "qtbot.runner.signal.signal"
+            ):
+                result = BotRunner(config=cfg, budget_cad=1000.0).run()
+
+            self.assertEqual(result.loop_count, 1)
+            fake_strategy.evaluate_cycle.assert_called_once()
+            fake_execution.execute_decisions.assert_called_once()
+
+
+if __name__ == "__main__":
+    unittest.main()

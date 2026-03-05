@@ -22,3 +22,12 @@ Copy `.env.example` to `.env` and fill NDAX credentials before private API check
   - `timestamp,symbol,close,ema_fast,ema_slow,atr,signal,reason`
 - Live execution (M4) is enabled with `QTBOT_ENABLE_LIVE_TRADING=true`.
 - In live mode, ENTER/EXIT decisions place NDAX market orders, ledger totals are updated in `runtime/state.sqlite`, and fills are appended to `runtime/logs/trades.csv`.
+
+## Testing and CI
+
+- Local test run:
+  - `PYTHONPATH=src python3 -m unittest discover -s tests -p "test_*.py"`
+- Coverage run:
+  - `PYTHONPATH=src coverage run --source=src/qtbot -m unittest discover -s tests -p "test_*.py"`
+  - `coverage report --show-missing`
+- GitHub Actions CI runs compile checks plus this test suite on every push and pull request.
