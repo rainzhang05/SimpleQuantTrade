@@ -185,7 +185,7 @@ State integrity is critical.
 The agent should ask the user for clarification if:
 
 - trading logic requirements are unclear
-- Kraken API behavior changes
+- NDAX API behavior changes
 - a decision significantly changes system behavior
 - security concerns arise
 

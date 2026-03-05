@@ -1,6 +1,6 @@
-# Final Roadmap + Instruction File: Minimal, Reliable CLI Quant Crypto Trader (Kraken, CAD, Spot-Only, Live)
+# Final Roadmap + Instruction File: Minimal, Reliable CLI Quant Crypto Trader (NDAX, CAD, Spot-Only, Live)
 
-This file instructs an AI agent to implement a **simple fixed-rule** quantitative crypto trading system that runs as a **command-line bot** on **Kraken**, using **CAD** only, with **live evaluation at the smallest practical cadence**, and **graceful pause/stop** from another terminal.
+This file instructs an AI agent to implement a **simple fixed-rule** quantitative crypto trading system that runs as a **command-line bot** on **NDAX**, using **CAD** only, with **live evaluation at the smallest practical cadence**, and **graceful pause/stop** from another terminal.
 
 The agent may modify project structure/files as needed, but MUST preserve all constraints and behaviors below.
 
@@ -9,10 +9,10 @@ The agent may modify project structure/files as needed, but MUST preserve all co
 ## 0) Hard Requirements (Non-Negotiable)
 
 ### Exchange / credentials
-- Exchange: **Kraken**
+- Exchange: **NDAX**
 - Load credentials from `.env`:
-  - `KRAKEN_API_KEY`
-  - `KRAKEN_API_SECRET`
+  - `NDAX_API_KEY`
+  - `NDAX_API_SECRET`
 
 ### Spot-only (no borrowing)
 - **Spot trading only**
@@ -36,8 +36,8 @@ The agent may modify project structure/files as needed, but MUST preserve all co
 ### Tradable universe
 - Only trade the hardcoded “top 20 market coins” list in code.
 - Exclude BTC and ETH → effectively **18 tradable coins**.
-- Only trade coins that have a **CAD spot pair** on Kraken.
-- If a configured coin has no CAD pair on Kraken, skip and log.
+- Only trade coins that have a **CAD spot pair** on NDAX.
+- If a configured coin has no CAD pair on NDAX, skip and log.
 
 ### Fees (must be applied)
 - Assume taker fees:
@@ -150,7 +150,7 @@ Use this simple deterministic policy:
   - `order_notional = bot_cash_cad / remaining_candidates`
 - Continue until either:
   - no more candidates, or
-  - bot_cash_cad falls below Kraken minimum order threshold + fees.
+  - bot_cash_cad falls below NDAX minimum order threshold + fees.
 
 Note: This does not limit total positions overall; it only limits how many *new* buys are attempted in one minute to avoid API/order bursts.
 
@@ -186,10 +186,10 @@ Accounting:
   - `bot_cash_cad += proceeds - fee`
   - realized pnl computed against average cost basis
 
-### Relationship to real Kraken balances
-The bot must also ensure it never attempts to spend more CAD than Kraken actually has available.
+### Relationship to real NDAX balances
+The bot must also ensure it never attempts to spend more CAD than NDAX actually has available.
 Rule:
-- `order_notional <= min(bot_cash_cad, kraken_available_cad)` after reserving estimated fees.
+- `order_notional <= min(bot_cash_cad, ndax_available_cad)` after reserving estimated fees.
 
 ---
 
@@ -228,10 +228,10 @@ Acceptable: `runtime/state.json` if atomic write is implemented (temp file + ren
 ### Resume behavior
 On start:
 1) If prior state exists and control is not STOPPED, load it
-2) Sync Kraken balances for all tradable coins
+2) Sync NDAX balances for all tradable coins
 3) Reconcile:
-   - If Kraken holdings differ from internal positions, treat Kraken as truth:
-     - update internal positions to match Kraken
+   - If NDAX holdings differ from internal positions, treat NDAX as truth:
+     - update internal positions to match NDAX
      - log a reconciliation event
 4) Do not place trades until reconciliation completes successfully
 
@@ -276,10 +276,10 @@ Columns (minimum):
 The agent must:
 - Provide a hardcoded list of 20 tickers in config (includes BTC, ETH).
 - Filter out BTC/ETH.
-- Map tickers to Kraken asset/pair codes.
+- Map tickers to NDAX market/pair symbols.
 - Validate CAD pair existence at startup:
   - if missing, skip coin
-- Always exclude BTC (XBT) and ETH regardless of naming.
+- Always exclude BTC and ETH regardless of exchange symbol aliasing.
 
 ---
 
@@ -288,7 +288,7 @@ The agent must:
 Suggested components:
 - `cli` (commands, control updates)
 - `runner` (main loop)
-- `kraken_client` (API wrapper)
+- `ndax_client` (API wrapper)
 - `strategy` (indicators + signals)
 - `execution` (orders + fill confirmation)
 - `state` (persistence + reconciliation)
@@ -308,7 +308,7 @@ Acceptance:
 - start runs a loop and writes logs/state every minute
 - pause/resume/stop works from another terminal and is graceful
 
-### M2: Kraken Integration
+### M2: NDAX Integration
 - Load `.env`
 - Fetch balances
 - Fetch OHLC candles (1m)

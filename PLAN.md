@@ -1,0 +1,314 @@
+# PLAN.md + Docs Migration Plan (NDAX Production Roadmap)
+
+## 1) Scope and Non-Negotiable Constraints
+
+This plan defines implementation phases to build and harden a production-grade CLI quant trader on **NDAX** with deterministic behavior and strict operational safety.
+
+Hard constraints:
+- Exchange: **NDAX** only.
+- Credentials from `.env`:
+  - `NDAX_API_KEY`
+  - `NDAX_API_SECRET`
+- Spot-only, no margin/leverage/borrowing/shorting.
+- CAD budget virtual sub-account model (`--budget`-based internal cash ledger).
+- BTC/ETH are permanently locked (no buy/sell, excluded from logic).
+- Tradable universe = hardcoded top 20 list minus BTC/ETH, and only symbols with NDAX CAD spot markets.
+- Live 60-second evaluation cadence, 1-minute signal timeframe.
+- Graceful control lifecycle from another terminal: `start`, `pause`, `resume`, `stop`, `status`.
+- Deterministic strategy and fee-aware accounting (0.4% per side).
+- Atomic persistence and safe restart reconciliation with NDAX as source of truth.
+
+## 2) Architecture / Modules (NDAX-Oriented)
+
+Target module boundaries:
+- `cli`:
+  - command parsing, lifecycle operations, status rendering.
+- `control`:
+  - atomic `runtime/control.json` updates and reads.
+- `runner`:
+  - 60-second loop orchestration, command handling, state transitions.
+- `config`:
+  - defaults, environment loading, runtime validation.
+- `ndax_client`:
+  - auth/signing, balances, market metadata, OHLC candles, order endpoints, order status/fills.
+- `universe`:
+  - hardcoded top-20 list, BTC/ETH exclusion, NDAX CAD market validation.
+- `strategy`:
+  - EMA/ATR calculations, deterministic signal generation.
+- `execution`:
+  - order sizing, market order submission, fill confirmation, idempotency guards.
+- `ledger`:
+  - cash/position/PnL/fee accounting and invariants.
+- `state`:
+  - SQLite persistence and recovery/reconciliation workflow.
+- `risk`:
+  - live risk gates (loss cap, slippage, kill-switch thresholds).
+- `logging`:
+  - `qtbot.log`, `trades.csv`, `decisions.csv` append-only outputs.
+- `alerts`:
+  - Discord webhook notifications for critical events.
+
+## 3) Implementation Phases (M0-M11)
+
+### M0: Docs and Spec Alignment
+- Update all docs to NDAX naming/credentials.
+- Create and maintain this `PLAN.md`.
+- Confirm docs are consistent (`README`, `ROADMAP`, `AGENTS`, `PLAN`).
+
+Exit criteria:
+- No stale legacy exchange/symbol references in core docs.
+- Credential contract standardized on `NDAX_API_KEY` / `NDAX_API_SECRET`.
+
+### M1: CLI, Control Plane, and Persistence Skeleton
+- Implement CLI commands:
+  - `qtbot start --budget <CAD>`
+  - `qtbot pause`
+  - `qtbot resume`
+  - `qtbot stop`
+  - `qtbot status`
+- Build control plane using atomic `runtime/control.json`.
+- Run loop heartbeat with periodic persistence.
+
+Exit criteria:
+- Control commands work cross-terminal without force-kill.
+- Pause/stop are graceful and state is persisted.
+
+### M2: NDAX API Integration
+- Implement NDAX authentication and robust client wrapper.
+- Pull balances and instrument metadata.
+- Pull 1-minute candles for the tradable universe.
+- Validate CAD market availability for configured symbols.
+
+Exit criteria:
+- Reliable market/balance retrieval with retry/backoff.
+- Deterministic validated tradable set from NDAX.
+
+### M3: Strategy Signals in Dry-Run
+- Implement indicators on 1-minute candles:
+  - EMA fast 60, EMA slow 360, ATR 60.
+- Implement fixed entry/exit rules and deterministic candidate ranking.
+- Emit `decisions.csv` with reasons each cycle.
+- Keep order placement disabled via dry-run mode.
+
+Exit criteria:
+- Stable reproducible signals for identical inputs.
+- No live orders while dry-run mode is enabled.
+
+### M4: Live Execution and Ledger
+- Enable market order execution path.
+- Confirm fills and compute effective fees per fill.
+- Update cash/positions/PnL transactionally.
+- Append all fills to `trades.csv`.
+
+Exit criteria:
+- Filled orders reconcile with ledger updates.
+- Budget and lock constraints remain enforced.
+
+### M5: Restart Reconciliation (NDAX as Truth)
+- On startup, load prior state and query NDAX balances.
+- Reconcile internal positions against NDAX holdings.
+- Log reconciliation differences and actions.
+- Block trading until reconciliation succeeds.
+
+Exit criteria:
+- Crash/restart does not corrupt trading state.
+- Internal state converges to NDAX truth before new orders.
+
+### M6: Go-Live Validation Gate
+- Implement a pre-trade validation workflow that verifies:
+  - credentials/auth,
+  - NDAX API reachability,
+  - CAD market coverage for universe,
+  - candle warm-up sufficiency,
+  - state DB read/write health,
+  - control file integrity.
+- Permit live order placement only if all checks pass.
+
+Exit criteria:
+- Failed preflight blocks live trading and reports exact failed checks.
+- Successful preflight enables live execution path safely.
+
+### M7: Risk Hardening
+- Add production safeguards:
+  - daily loss cap,
+  - max slippage guard,
+  - consecutive error kill-switch / auto-pause.
+- Ensure all safeguards are deterministic and logged.
+
+Exit criteria:
+- Safety conditions block unsafe execution paths reliably.
+
+### M8: Logging and Discord Alerting
+- Finalize append-only runtime logs:
+  - `runtime/logs/qtbot.log`
+  - `runtime/logs/trades.csv`
+  - `runtime/logs/decisions.csv`
+- Integrate Discord alerts for:
+  - stop/pause events,
+  - repeated API failures,
+  - reconciliation anomalies,
+  - risk-triggered halts.
+
+Exit criteria:
+- Operator can diagnose critical issues from logs + alerts.
+
+### M9: Docker Production Packaging
+- Build Python 3.11 Docker image.
+- Add `docker-compose` runtime with persistent volume for `runtime/`.
+- Provide environment template and startup commands.
+
+Exit criteria:
+- Bot is reproducible and operable in containerized production deployment.
+
+### M10: Staging Validation
+- Run continuous dry-run in staging with live NDAX data.
+- Exercise lifecycle commands and failure scenarios.
+- Verify reconciliation and risk controls under simulated faults.
+
+Exit criteria:
+- Staging run proves operational stability before production.
+
+### M11: Production Cutover Checklist
+- Confirm all acceptance criteria pass.
+- Start with constrained budget and monitor first cycles.
+- Verify first trade flow, ledger consistency, and alerting behavior.
+- Define rollback/stop procedure and incident response path.
+
+Exit criteria:
+- Production launch checklist fully green and operator-ready.
+
+## 4) CLI Lifecycle and Control-Plane Behavior
+
+Lifecycle contract:
+1. `start`:
+   - initializes runtime artifacts,
+   - sets/reads control command,
+   - enters loop.
+2. `pause`:
+   - sets control to `PAUSE`,
+   - runner stops new order placement and persists immediately.
+3. `resume`:
+   - sets control to `RUN`,
+   - runner resumes normal evaluations.
+4. `stop`:
+   - sets control to `STOP`,
+   - runner persists state and exits cleanly.
+5. `status`:
+   - reports mode, last loop timestamp, positions, cash, PnL, and health summary.
+
+Control file requirements:
+- Path: `runtime/control.json`
+- Atomic write semantics: temp file + fsync + rename.
+- Command values:
+  - `RUN`
+  - `PAUSE`
+  - `STOP`
+
+## 5) NDAX Integration and Reconciliation Plan
+
+NDAX integration requirements:
+- Signed/private API support for balances and orders.
+- Public market data support for 1-minute candles and symbol metadata.
+- Explicit timeout and retry policy with exponential backoff.
+- Deterministic error classification and logging context.
+
+Reconciliation flow:
+1. Load local persisted state.
+2. Query NDAX balances for all tracked symbols.
+3. Compare internal vs NDAX quantities.
+4. If mismatch, update internal positions to NDAX values.
+5. Log reconciliation event with before/after details.
+6. Only continue trading when reconciliation completes successfully.
+
+## 6) Risk Controls and Observability
+
+Risk controls (production baseline):
+- BTC/ETH hard lock enforced in:
+  - universe filtering,
+  - signal generation,
+  - execution preflight checks.
+- Budget enforcement:
+  - no order may exceed internal `bot_cash_cad`.
+  - no order may exceed available exchange CAD:
+    - `order_notional <= min(bot_cash_cad, ndax_available_cad)` with fee buffer.
+- Daily loss cap:
+  - pause execution when threshold is breached.
+- Slippage guard:
+  - reject orders when expected/realized slippage exceeds threshold.
+- Consecutive error kill-switch:
+  - auto-pause and alert when sustained API failures occur.
+
+Observability:
+- Human-readable operational log.
+- Structured trade and decision CSV streams.
+- Discord alerts for critical failures and lifecycle transitions.
+
+## 7) Test Strategy and Acceptance Gates
+
+Unit tests:
+- Indicator math correctness.
+- Signal rule determinism.
+- Ledger fee/PnL accounting invariants.
+- Risk control threshold triggers.
+- Control-file atomicity behavior.
+
+Integration tests:
+- CLI lifecycle command behavior across terminals.
+- NDAX client retry/backoff under transient failures.
+- Reconciliation when local and NDAX state diverge.
+- Dry-run to live gate behavior.
+- Logging append-only guarantees.
+
+Acceptance gates:
+- M0-M11 exit criteria all passed.
+- No prohibited asset trade path exists.
+- Restart/pause/stop cannot corrupt state.
+- Decisions and trades are fully traceable in logs.
+
+## 8) Rollout and Operations Runbook Checklist
+
+Pre-deploy:
+- Validate environment variables.
+- Verify runtime volume permissions.
+- Confirm Discord webhook connectivity.
+
+Deploy:
+- Launch container in dry-run mode.
+- Verify loop heartbeat and decision logging.
+- Perform control command drills (`pause`, `resume`, `stop`).
+
+Go-live:
+- Run full validation gate.
+- Enable live execution only after all checks pass.
+- Start with minimal budget and observe initial cycles.
+
+Steady state:
+- Monitor logs and alerts continuously.
+- Apply pause/stop playbook on risk trigger or API instability.
+
+Incident response:
+- Stop trading gracefully.
+- Capture state/log snapshot.
+- Reconcile against NDAX balances before resuming.
+
+## 9) Explicit Assumptions and Defaults
+
+Assumptions:
+- NDAX CAD spot markets exist for a subset of the configured top-20 universe.
+- The exchange APIs support sufficient polling cadence for 60-second loops.
+
+Defaults:
+- Loop cadence: 60 seconds.
+- Candle timeframe: 1 minute.
+- EMA fast/slow: 60 / 360.
+- ATR length: 60.
+- ATR stop multiple: 2.5.
+- Max hold duration: 48 hours.
+- Cooldown after exit: 30 minutes.
+- Max new entries per cycle: 3.
+- Fee model: 0.4% per side.
+- State store: `runtime/state.sqlite`.
+
+Documentation policy:
+- NDAX naming remains canonical in all docs.
+- No backward-compatibility aliasing for legacy exchange credential variables is documented.
