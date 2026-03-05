@@ -13,6 +13,8 @@ The agent may modify project structure/files as needed, but MUST preserve all co
 - Load credentials from `.env`:
   - `NDAX_API_KEY`
   - `NDAX_API_SECRET`
+  - `NDAX_USER_ID` (required for authenticated private calls such as balances)
+  - `NDAX_USERNAME` (optional helper for user/account lookup calls)
 
 ### Spot-only (no borrowing)
 - **Spot trading only**

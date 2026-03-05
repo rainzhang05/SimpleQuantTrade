@@ -114,6 +114,22 @@ Exit criteria:
 - Reliable market/balance retrieval with retry/backoff.
 - Deterministic validated tradable set from NDAX.
 
+M2 implementation status:
+- [x] `.env` loading implemented for runtime and NDAX settings.
+- [x] NDAX client wrapper implemented with retry/backoff and signed private request headers.
+- [x] Public market metadata implemented via `GetInstruments`.
+- [x] 1-minute candle retrieval implemented via `GetTickerHistory` (`Interval=60`).
+- [x] Top-20-minus-locked CAD universe validation implemented against live NDAX instruments.
+- [x] Authenticated balance flow implemented via `GetUserAccounts` + `GetAccountPositions`.
+- [x] CLI integration commands added: `ndax-pairs`, `ndax-candles`, `ndax-balances`, `ndax-check`.
+
+M2 validation evidence:
+- Compile check: `python3 -m compileall src` passed.
+- Public pair validation: `PYTHONPATH=src python3 -m qtbot ndax-pairs` returned live instrument set and tradable CAD pairs.
+- Candle retrieval: `PYTHONPATH=src python3 -m qtbot ndax-candles --symbol SOLCAD --from-date 2026-03-04 --to-date 2026-03-05 --interval 60` returned 1m candles.
+- End-to-end public check: `PYTHONPATH=src python3 -m qtbot ndax-check --skip-balances --symbol SOLCAD --from-date 2026-03-04 --to-date 2026-03-05 --interval 60` passed.
+- Private credential gate: `PYTHONPATH=src python3 -m qtbot ndax-balances` fails with explicit missing-credential message when auth vars are absent.
+
 ### M3: Strategy Signals in Dry-Run
 - Implement indicators on 1-minute candles:
   - EMA fast 60, EMA slow 360, ATR 60.
