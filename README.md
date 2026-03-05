@@ -23,6 +23,12 @@ Copy `.env.example` to `.env` and fill NDAX credentials before private API check
 - Live execution (M4) is enabled with `QTBOT_ENABLE_LIVE_TRADING=true`.
 - In live mode, ENTER/EXIT decisions place NDAX market orders, ledger totals are updated in `runtime/state.sqlite`, and fills are appended to `runtime/logs/trades.csv`.
 
+## M5 Startup Reconciliation
+
+- On startup, the runner performs reconciliation against NDAX balances before entering the trading loop.
+- NDAX is treated as the source of truth for tracked holdings and reconciliation changes are written to `state_events`.
+- In live mode, startup is blocked if reconciliation fails.
+
 ## Testing and CI
 
 - Local test run:

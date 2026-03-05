@@ -415,6 +415,130 @@ class StateStore:
                 ),
             )
 
+    def reconcile_position(
+        self,
+        *,
+        symbol: str,
+        ndax_qty: float,
+        reference_price: float | None,
+        reconciled_at_utc: str,
+        reason: str,
+    ) -> bool:
+        if ndax_qty < 0:
+            raise ValueError("ndax_qty must be >= 0.")
+        now = utc_now_iso()
+        with self._connect() as conn:
+            position = self._read_position(conn, symbol=symbol)
+            if abs(position.qty - ndax_qty) <= 1e-9:
+                return False
+
+            if ndax_qty <= 1e-9:
+                new_qty = 0.0
+                new_avg_entry_price = 0.0
+                new_entry_time = None
+                new_last_exit_time = (
+                    reconciled_at_utc if position.qty > 1e-9 else position.last_exit_time
+                )
+            else:
+                new_qty = ndax_qty
+                if position.qty > 1e-9 and position.avg_entry_price > 0:
+                    new_avg_entry_price = position.avg_entry_price
+                elif reference_price is not None and reference_price > 0:
+                    new_avg_entry_price = float(reference_price)
+                else:
+                    new_avg_entry_price = 0.0
+                new_entry_time = position.entry_time or reconciled_at_utc
+                new_last_exit_time = position.last_exit_time
+
+            conn.execute(
+                """
+                INSERT INTO positions (symbol, qty, avg_entry_price, entry_time, last_exit_time, updated_at_utc)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(symbol) DO UPDATE SET
+                    qty = excluded.qty,
+                    avg_entry_price = excluded.avg_entry_price,
+                    entry_time = excluded.entry_time,
+                    last_exit_time = excluded.last_exit_time,
+                    updated_at_utc = excluded.updated_at_utc
+                """,
+                (
+                    symbol,
+                    new_qty,
+                    new_avg_entry_price,
+                    new_entry_time,
+                    new_last_exit_time,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE bot_state
+                SET
+                    last_event = ?,
+                    updated_at_utc = ?
+                WHERE id = 1
+                """,
+                (
+                    f"position_reconciled:{symbol}:{reason}",
+                    now,
+                ),
+            )
+            self._insert_event(
+                conn,
+                event_type="POSITION_RECONCILED",
+                detail=(
+                    f"symbol={symbol} reason={reason} internal_qty={position.qty:.12g} "
+                    f"ndax_qty={ndax_qty:.12g} reference_price={reference_price}"
+                ),
+            )
+            return True
+
+    def cap_bot_cash(self, *, max_cash_cad: float, reason: str) -> bool:
+        if max_cash_cad < 0:
+            raise ValueError("max_cash_cad must be >= 0.")
+        now = utc_now_iso()
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT bot_cash_cad
+                FROM bot_state
+                WHERE id = 1
+                """
+            ).fetchone()
+            if row is None:
+                raise ValueError("bot_state row missing.")
+            current_cash = float(row["bot_cash_cad"])
+            if current_cash <= max_cash_cad + 1e-9:
+                return False
+            conn.execute(
+                """
+                UPDATE bot_state
+                SET
+                    bot_cash_cad = ?,
+                    last_event = ?,
+                    updated_at_utc = ?
+                WHERE id = 1
+                """,
+                (
+                    max_cash_cad,
+                    f"bot_cash_capped:{reason}",
+                    now,
+                ),
+            )
+            self._insert_event(
+                conn,
+                event_type="BOT_CASH_CAPPED",
+                detail=(
+                    f"reason={reason} old_bot_cash_cad={current_cash:.12g} "
+                    f"new_bot_cash_cad={max_cash_cad:.12g}"
+                ),
+            )
+            return True
+
+    def add_event(self, *, event_type: str, detail: str) -> None:
+        with self._connect() as conn:
+            self._insert_event(conn, event_type=event_type, detail=detail)
+
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(self._db_path, timeout=30)

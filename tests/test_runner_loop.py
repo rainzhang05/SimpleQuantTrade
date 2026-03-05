@@ -9,6 +9,7 @@ import unittest
 from unittest import mock
 
 from qtbot.control import Command, ControlState
+from qtbot.ndax_client import NdaxError
 from qtbot.runner import BotRunner
 from qtbot.strategy.engine import StrategySummary
 from tests._helpers import make_runtime_config
@@ -77,17 +78,48 @@ class RunnerLoopTests(unittest.TestCase):
             ), mock.patch(
                 "qtbot.runner.LiveExecutionEngine", return_value=fake_execution
             ), mock.patch(
+                "qtbot.runner.StartupReconciler"
+            ) as reconciler_cls, mock.patch(
+                "qtbot.runner.signal.signal"
+            ), mock.patch(
                 "qtbot.runner.read_control", side_effect=control_states
             ), mock.patch(
                 "qtbot.runner.write_control", return_value=control_states[0]
-            ), mock.patch(
-                "qtbot.runner.signal.signal"
             ):
+                reconciler_cls.return_value.reconcile.return_value = mock.Mock(
+                    message="reconciliation_complete"
+                )
                 result = BotRunner(config=cfg, budget_cad=1000.0).run()
 
             self.assertEqual(result.loop_count, 1)
             fake_strategy.evaluate_cycle.assert_called_once()
             fake_execution.execute_decisions.assert_called_once()
+
+    def test_runner_blocks_start_when_live_reconciliation_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = make_runtime_config(Path(td), enable_live_trading=True)
+            logger = logging.getLogger("runner-test-live-block")
+            if not logger.handlers:
+                logger.addHandler(logging.NullHandler())
+
+            with mock.patch("qtbot.runner.configure_logging", return_value=logger), mock.patch(
+                "qtbot.runner.StateStore", _FakeStateStore
+            ), mock.patch("qtbot.runner.NdaxClient", return_value=mock.Mock()), mock.patch(
+                "qtbot.runner.DecisionCsvLogger", return_value=mock.Mock()
+            ), mock.patch(
+                "qtbot.runner.TradeCsvLogger", return_value=mock.Mock()
+            ), mock.patch(
+                "qtbot.runner.StrategyEngine", return_value=mock.Mock()
+            ), mock.patch(
+                "qtbot.runner.LiveExecutionEngine", return_value=mock.Mock()
+            ), mock.patch(
+                "qtbot.runner.StartupReconciler"
+            ) as reconciler_cls, mock.patch(
+                "qtbot.runner.signal.signal"
+            ):
+                reconciler_cls.return_value.reconcile.side_effect = NdaxError("reconcile failed")
+                with self.assertRaises(NdaxError):
+                    BotRunner(config=cfg, budget_cad=1000.0).run()
 
 
 if __name__ == "__main__":

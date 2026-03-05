@@ -15,7 +15,8 @@ from qtbot.control import Command, read_control, write_control
 from qtbot.decision_log import DecisionCsvLogger
 from qtbot.execution import LiveExecutionEngine
 from qtbot.logging_setup import configure_logging
-from qtbot.ndax_client import NdaxClient, NdaxError
+from qtbot.ndax_client import NdaxAuthenticationError, NdaxClient, NdaxError
+from qtbot.reconciliation import StartupReconciler
 from qtbot.state import StateStore
 from qtbot.strategy.engine import StrategyEngine
 from qtbot.trade_log import TradeCsvLogger
@@ -118,6 +119,44 @@ class BotRunner:
                 trade_logger=trade_logger,
                 logger=logger,
             )
+            reconciler = StartupReconciler(
+                config=self._config,
+                ndax_client=ndax_client,
+                state_store=state_store,
+                logger=logger,
+            )
+
+            state_store.set_status(
+                run_status="RECONCILING",
+                last_command=Command.STOP.value,
+                event_detail="startup reconciliation started",
+            )
+            try:
+                reconciliation = reconciler.reconcile()
+                logger.info("Startup reconciliation completed. %s", reconciliation.message)
+                startup_event = reconciliation.message
+            except (NdaxAuthenticationError, NdaxError) as exc:
+                event_detail = f"startup_reconciliation_failed: {exc}"
+                if self._config.enable_live_trading:
+                    state_store.set_status(
+                        run_status="ERROR",
+                        last_command=Command.STOP.value,
+                        event_detail=event_detail,
+                    )
+                    logger.error(
+                        "Startup reconciliation failed in live mode. Blocking bot start: %s",
+                        exc,
+                    )
+                    raise
+                logger.warning(
+                    "Startup reconciliation skipped in dry-run mode due to NDAX error: %s",
+                    exc,
+                )
+                state_store.add_event(
+                    event_type="RECONCILIATION_SKIPPED",
+                    detail=event_detail,
+                )
+                startup_event = f"startup_reconciliation_skipped: {exc}"
 
             write_control(
                 self._config.control_file,
@@ -128,7 +167,7 @@ class BotRunner:
             state_store.set_status(
                 run_status="RUNNING",
                 last_command=Command.RUN.value,
-                event_detail="runner startup",
+                event_detail=f"runner startup; {startup_event}",
             )
 
             self._install_signal_handlers(logger=logger)

@@ -158,6 +158,55 @@ class StateStoreTests(unittest.TestCase):
             self.assertEqual(float(snapshot["realized_pnl_cad"]), 0.0)
             self.assertEqual(float(snapshot["fees_paid_cad"]), 0.0)
 
+    def test_reconcile_position_and_cap_bot_cash(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "state.sqlite"
+            store = StateStore(db_path)
+            store.initialize(initial_budget_cad=1000.0)
+
+            changed = store.reconcile_position(
+                symbol="SOL",
+                ndax_qty=2.0,
+                reference_price=120.0,
+                reconciled_at_utc="2026-03-05T00:00:00+00:00",
+                reason="test",
+            )
+            self.assertTrue(changed)
+            pos = store.get_positions()["SOL"]
+            self.assertEqual(pos.qty, 2.0)
+            self.assertEqual(pos.entry_time, "2026-03-05T00:00:00+00:00")
+            self.assertEqual(pos.avg_entry_price, 120.0)
+
+            unchanged = store.reconcile_position(
+                symbol="SOL",
+                ndax_qty=2.0,
+                reference_price=130.0,
+                reconciled_at_utc="2026-03-05T00:10:00+00:00",
+                reason="test",
+            )
+            self.assertFalse(unchanged)
+
+            closed = store.reconcile_position(
+                symbol="SOL",
+                ndax_qty=0.0,
+                reference_price=None,
+                reconciled_at_utc="2026-03-05T01:00:00+00:00",
+                reason="test",
+            )
+            self.assertTrue(closed)
+            pos = store.get_positions()["SOL"]
+            self.assertEqual(pos.qty, 0.0)
+            self.assertEqual(pos.last_exit_time, "2026-03-05T01:00:00+00:00")
+
+            capped = store.cap_bot_cash(max_cash_cad=100.0, reason="test")
+            self.assertTrue(capped)
+            snapshot = store.get_snapshot()
+            assert snapshot is not None
+            self.assertEqual(float(snapshot["bot_cash_cad"]), 100.0)
+
+            capped_again = store.cap_bot_cash(max_cash_cad=200.0, reason="test")
+            self.assertFalse(capped_again)
+
 
 if __name__ == "__main__":
     unittest.main()

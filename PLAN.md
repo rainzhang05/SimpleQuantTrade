@@ -190,6 +190,22 @@ Exit criteria:
 - Crash/restart does not corrupt trading state.
 - Internal state converges to NDAX truth before new orders.
 
+M5 implementation status:
+- [x] Startup reconciliation service implemented (`StartupReconciler`) with NDAX balance sync and symbol-by-symbol quantity convergence.
+- [x] State-store reconciliation primitives added (`reconcile_position`, `cap_bot_cash`, reconciliation event recording).
+- [x] Runner startup now performs reconciliation before setting loop to RUN state.
+- [x] Live mode startup is blocked when reconciliation/authentication fails.
+- [x] Reconciliation audit trail added via `state_events` entries (`POSITION_RECONCILED`, `BOT_CASH_CAPPED`, `RECONCILIATION_COMPLETED` / `RECONCILIATION_SKIPPED`).
+
+M5 validation evidence:
+- Compile check: `python3 -m compileall src` passed after reconciliation changes.
+- NDAX private/public health check: `PYTHONPATH=src python3 -m qtbot ndax-check --require-balances --symbol SOLCAD --from-date 2026-03-04 --to-date 2026-03-05 --interval 60` passed.
+- Live-mode guarded startup test (no real orders): `QTBOT_RUNTIME_DIR=runtime_m5_check QTBOT_CADENCE_SECONDS=3 QTBOT_ENABLE_LIVE_TRADING=true QTBOT_MIN_ORDER_NOTIONAL_CAD=1000000000 PYTHONPATH=src python3 -m qtbot start --budget 1000` completed reconciliation and entered loop.
+- Reconciliation persistence validated via `state_events`:
+  - `STATUS_CHANGED|startup reconciliation started`
+  - `BOT_CASH_CAPPED|...` (when NDAX CAD available was lower than internal cash)
+  - `RECONCILIATION_COMPLETED|reconciliation_complete ...`
+
 ### M6: Go-Live Validation Gate
 - Implement a pre-trade validation workflow that verifies:
   - credentials/auth,
