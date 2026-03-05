@@ -1,355 +1,384 @@
-# Implementation Plan: SimpleQuantTrade ML 15m Upgrade
+# Step-by-Step Upgrade Plan: Current Runtime -> Production-Grade ML (15m)
 
-This plan operationalizes `docs/ROADMAP.md` into execution phases.
+This is the implementation playbook from the current shipped version to a fully usable production-grade ML system.
 
-Plan objective:
-- Replace fixed-rule 1m strategy path with ML-driven 15m pipeline while preserving operational safety shell.
-- Deliver deterministic, laptop-grade production workflow from data ingestion to live ML inference.
+Primary design authority:
+- `docs/ROADMAP.md`
 
-## 0) Delivery Principles
+This document answers:
+- what exists now
+- what to build next, in exact order
+- how to verify each step
+- what “fully usable” means in production
 
-- Prioritize correctness and safety over speed.
-- Keep deterministic behavior across training and runtime.
-- Preserve control-plane, reconciliation, preflight, and risk-halting behavior.
-- Do not break Docker and staging/cutover operator workflows.
-- Every phase must ship with tests and CI updates for changed behavior.
+## 1) Current Baseline (Starting Point)
 
-## 1) Phase 0: Docs and Contract Freeze
+Current implemented baseline in repository:
+- NDAX spot-only CLI bot with lifecycle control plane.
+- Existing commands:
+- `start`, `pause`, `resume`, `stop`, `status`
+- `ndax-pairs`, `ndax-candles`, `ndax-balances`, `ndax-check`
+- `staging-validate`, `cutover-checklist`
+- Startup reconciliation and go-live preflight.
+- Risk controls: daily loss cap, slippage guard, consecutive-error kill-switch.
+- Persistent runtime state/logging and Docker workflow.
+- Strategy path is still fixed-rule (legacy) in implementation.
 
-### Goals
-- Freeze target interfaces before major code migration.
-- Archive legacy fixed-rule behavior.
+Target to reach:
+- ML-driven 15m bar-close trading pipeline with deterministic training/eval/promotion/deployment.
 
-### Deliverables
-- Rewrite roadmap, plan, README, runbook, and agent instructions.
-- Add legacy archive document.
-- Freeze Universe V1, thresholds, gate profile, and defaults.
+## 2) End-State Definition (What We Are Building)
 
-### Interface/contracts locked
-- CLI v2 target command surface.
-- Bundle format and active-pointer contract.
-- Storage layout and snapshot hash contract.
+System is fully usable only when all are true:
+1. 15m data can be backfilled for Universe V1 and audited for coverage/gaps.
+2. Sealed snapshot hashes are reproducible.
+3. Walk-forward training/evaluation is deterministic and persisted.
+4. Promotion gates deterministically approve/reject model runs.
+5. Runtime loads promoted bundle and decides only on closed 15m bars.
+6. Observe-only fallback works when model integrity/preflight fails.
+7. Staging/cutover and rollback workflows are operational.
 
-### Tests and CI
-- Documentation lint/check step if available.
-- Manual consistency check across all docs for command/config parity.
+## 3) Delivery Rules (Apply to Every Step)
 
-### Acceptance
-- All docs reflect ML 15m as primary architecture.
-- Legacy fixed-rule content clearly marked archival.
+- Do not remove existing safety shell while migrating.
+- Keep old strategy path intact until ML path is validated and rollback exists.
+- Every step must ship with tests and CI updates.
+- No step is complete without deterministic reproducibility checks.
+- No live activation without staging + cutover green.
 
-## 2) Phase 1: Data Layer (Milestone A)
+## 4) Step-by-Step Execution Guide
 
-### Goals
-- Add deterministic 15m market data ingestion and coverage reporting.
+## Step 0: Freeze Baseline and Introduce Compatibility Layer
 
-### Deliverables
-- `qtbot data-backfill` command.
-- `qtbot data-status` command.
-- Parquet writer for `data/raw/ndax/15m/<SYMBOL>.parquet`.
-- Gap and duplicate detection for candles.
+### Goal
+Create a safe migration base so ML interfaces can be added without breaking current runtime.
 
-### Module boundaries
-- New data service module for chunked NDAX fetch/retry/backoff.
-- Data-quality validator module.
-- CLI handlers for data commands.
+### Implementation
+- Add new config keys from roadmap (with defaults) while preserving existing keys:
+- `QTBOT_TIMEFRAME=15m`
+- `QTBOT_UNIVERSE=V1`
+- `QTBOT_BTC_ETH_LOCK=true`
+- `QTBOT_MODEL_BUNDLE_PATH=models/bundles/LATEST`
+- `QTBOT_ENTRY_THRESHOLD=0.60`
+- `QTBOT_EXIT_THRESHOLD=0.48`
+- `QTBOT_SLIPPAGE_MODEL=fixed_bps`
+- `QTBOT_FEE_PCT_PER_SIDE=0.002`
+- `QTBOT_FEATURE_SPEC_VERSION=v1`
+- Keep lifecycle and existing commands unchanged.
 
-### Schema/interface changes
-- Add `data_coverage` table in `runtime/state.sqlite`.
-- Define candle schema contract (timestamp/open/high/low/close/volume).
+### Verification
+- Existing CLI smoke tests pass unchanged.
+- Existing staging/cutover offline commands still pass.
+
+### Exit criteria
+- Runtime can load new config keys without altering current behavior.
+
+## Step 1: Build 15m Data Backfill and Coverage Status
+
+### Goal
+Implement deterministic 15m data ingestion as foundation for ML.
+
+### Implementation
+- Add `qtbot data-backfill --from --to --timeframe 15m`.
+- Add `qtbot data-status`.
+- Store canonical candles at:
+- `data/raw/ndax/15m/<SYMBOL>.parquet`
+- Add dedupe + normalized 15m timestamp rounding.
+- Add gap/duplicate reporting and data coverage summary.
+- Populate `data_coverage` table in SQLite.
 
 ### Tests
-- Unit tests for dedupe, timestamp normalization, and chunk merge.
-- Integration tests for backfill idempotence and coverage reporting.
+- Unit: dedupe, timestamp boundary normalization, gap detection.
+- Integration: repeated backfill is idempotent.
 
 ### CI updates
-- Add offline data-layer tests.
-- Keep existing full test suite and coverage gate green.
+- Add data-layer test job.
 
-### Acceptance
-- Deterministic data files and per-symbol status.
-- Gap detection produces stable results.
+### Exit criteria
+- Full universe backfill produces deterministic files and stable coverage report.
 
-## 3) Phase 2: Feature Pipeline (Milestone B)
+## Step 2: Enforce Data-Quality Gates
 
-### Goals
-- Build deterministic feature generation for 50 to 80 features.
+### Goal
+Prevent bad data from entering training or live inference.
 
-### Deliverables
-- Feature-engineering module with explicit windows/transforms.
-- Feature-spec emitter (`feature_spec.json`).
-- Warmup handling and null-policy implementation.
+### Implementation
+- Add hard gates for:
+- monotonic timestamps
+- duplicate key rejection
+- gap threshold checks
+- warmup sufficiency checks
+- UTC consistency checks
+- Wire gates into training entrypoints and live preflight.
 
-### Module boundaries
-- `features/` package for transforms and feature registry.
-- Shared deterministic math utilities.
+### Tests
+- Fail-case fixtures for each gate.
+- Preflight blocking tests.
 
-### Schema/interface changes
-- Feature schema version and hash generation.
-- Feature column ordering contract.
+### Exit criteria
+- Training and live preflight both block on hard data-gate failures.
+
+## Step 3: Implement Deterministic Feature Pipeline
+
+### Goal
+Generate 50 to 80 high-ROI deterministic features.
+
+### Implementation
+- Add feature module with fixed windows/transforms.
+- Include families:
+- returns/momentum
+- volatility/range
+- trend strength
+- mean-reversion
+- volume dynamics
+- market context
+- Emit `feature_spec.json` with feature order and transforms.
+- Enforce no leakage and deterministic missing-value policy.
 
 ### Tests
 - Unit tests per feature family.
-- Determinism regression tests (same input -> identical output).
-- Warmup/NaN behavior tests.
+- Determinism regression test (same input -> same output).
+- Warmup and no-steady-state-NaN checks.
 
-### CI updates
-- Add feature determinism test job.
+### Exit criteria
+- Feature output is reproducible and contract-defined.
 
-### Acceptance
-- Same snapshot yields byte-identical feature output.
-- Warmup rows handled per spec without leaking future info.
+## Step 4: Build Sealed Snapshot System
 
-## 4) Phase 3: Snapshot Builder (Milestone C)
+### Goal
+Create reproducible dataset artifacts for training.
 
-### Goals
-- Produce sealed, reproducible datasets for training.
-
-### Deliverables
-- `qtbot build-snapshot` command.
-- Snapshot manifest writer.
-- Dataset hash computation over ordered rows.
-
-### Module boundaries
-- Snapshot orchestrator module.
-- Manifest and checksum utility module.
-
-### Schema/interface changes
-- Snapshot ID format and manifest schema.
-- Snapshot directory contract under `data/snapshots/<SNAPSHOT_ID>/`.
+### Implementation
+- Add `qtbot build-snapshot --asof <ISO8601>`.
+- Create snapshot folder:
+- `data/snapshots/<SNAPSHOT_ID>/`
+- Manifest includes checksums and dataset hash.
+- Snapshot ID encodes as-of, universe hash, schema version.
 
 ### Tests
-- Rebuild-equivalence test for identical as-of.
-- Manifest checksum validation tests.
+- Re-run same snapshot build and assert identical hash.
+- Manifest integrity verification tests.
 
-### CI updates
-- Add snapshot reproducibility test case.
+### Exit criteria
+- Snapshot reproducibility contract passes consistently.
 
-### Acceptance
-- Same source data and as-of produce identical `dataset_hash`.
+## Step 5: Add Walk-Forward Orchestrator and Training DB Tables
 
-## 5) Phase 4: Walk-Forward Orchestration (Milestone D)
+### Goal
+Implement deterministic fold schedule and run tracking.
 
-### Goals
-- Implement deterministic fold generation and run tracking.
-
-### Deliverables
-- Fold generator with default 12m train, 1m validate, 1m step.
-- Run lifecycle tracking.
-- CLI `train` scaffolding for fold execution.
-
-### Module boundaries
-- `training/orchestrator.py`
-- `training/folds.py`
-
-### Schema/interface changes
+### Implementation
+- Add default walk-forward schedule:
+- train 12 months, validate 1 month, step 1 month
 - Add tables:
 - `training_runs`
 - `training_folds`
 - `fold_metrics`
+- Add `qtbot train --snapshot <SNAPSHOT_ID> --folds <N> --universe V1` scaffold.
 
 ### Tests
-- Fold-boundary determinism tests.
-- Train/val range integrity tests.
-- Run-state transition tests.
+- Fold boundary determinism.
+- Run-state transitions and table writes.
 
-### CI updates
-- Include orchestrator tests in suite.
+### Exit criteria
+- Fold generation and tracking are deterministic and auditable.
 
-### Acceptance
-- Fold schedule reproducible from same inputs.
-- Fold metadata persisted and auditable.
+## Step 6: Implement LightGBM Trainers (Global + Per-Coin)
 
-## 6) Phase 5: LightGBM Trainers (Milestone E)
+### Goal
+Train model artifacts deterministically from snapshot/folds.
 
-### Goals
-- Train global and per-coin models deterministically.
-
-### Deliverables
-- LightGBM trainer module for global model.
-- LightGBM trainer module for per-coin models.
-- Persist per-fold artifacts and run summary metadata.
-
-### Module boundaries
-- `training/lightgbm_trainer.py`
-- `training/model_registry.py`
-
-### Schema/interface changes
-- Extend run metadata with parameter hash and seed.
+### Implementation
+- Train global pooled LightGBM model.
+- Train per-coin LightGBM models when enough symbol history exists.
+- Store params/seed/hash metadata in run records.
+- Persist fold artifacts and summaries.
 
 ### Tests
-- Trainer smoke tests on small deterministic fixture.
-- Deterministic reproducibility test with fixed seed.
-- Missing-per-coin-history fallback tests.
+- Deterministic training with fixed seed.
+- Per-coin missing-data fallback tests.
 
-### CI updates
-- Add optional LightGBM dependency in test matrix.
+### Exit criteria
+- Training runs complete end-to-end with reproducible artifacts.
 
-### Acceptance
-- End-to-end training run completes and artifacts are reproducible.
+## Step 7: Build Cost-Aware Evaluator
 
-## 7) Phase 6: Cost-Aware Evaluator (Milestone F)
+### Goal
+Evaluate models using live-aligned execution constraints.
 
-### Goals
-- Simulate live-constrained execution for promotion decisions.
-
-### Deliverables
-- `qtbot eval --run <RUN_ID>` command.
-- Cost-aware simulator with fees/slippage/liquidity gates.
-- Fold and aggregate metrics report.
-
-### Module boundaries
-- `evaluation/simulator.py`
-- `evaluation/metrics.py`
-- `evaluation/cost_model.py`
-
-### Schema/interface changes
-- Persist fold metrics JSON and aggregate run metrics.
+### Implementation
+- Add `qtbot eval --run <RUN_ID>`.
+- Simulate constraints:
+- market orders only
+- cooldown and max entries per cycle
+- CAD and exchange-availability caps
+- risk halt behavior
+- Default fee baseline:
+- `QTBOT_FEE_PCT_PER_SIDE=0.002`
+- Add slippage model option (`fixed_bps` default).
+- Produce fold and aggregate metrics including stress test (+50% slippage).
 
 ### Tests
-- Cost-model tests for fee/slippage correctness.
-- Constraint-alignment tests with live rules.
-- Stress test path (+50% slippage) verification.
+- Fee/slippage correctness tests.
+- Stress-test metric consistency tests.
 
-### CI updates
-- Add evaluator regression fixtures.
+### Exit criteria
+- Deterministic metrics produced for every fold and aggregate run.
 
-### Acceptance
-- Evaluator outputs stable, deterministic metrics including risk and robustness dimensions.
+## Step 8: Implement Promotion Gates and Bundle Publisher
 
-## 8) Phase 7: Promotion and Bundle Publisher (Milestone G)
+### Goal
+Promote only safe/stable runs and publish signed deployment artifact.
 
-### Goals
-- Gate model deployment and publish signed bundles.
-
-### Deliverables
-- `qtbot promote --run <RUN_ID>` command.
-- Hard/soft gate engine using conservative defaults.
-- Bundle writer and `LATEST` atomic pointer update.
-- `qtbot model-status` command.
-
-### Module boundaries
-- `promotion/gates.py`
-- `promotion/bundle_writer.py`
-- `promotion/model_status.py`
-
-### Schema/interface changes
-- Add `promotions` table.
-- Persist promotion metadata and bundle hash.
-
-### Tests
-- Gate pass/fail scenario coverage.
-- Bundle integrity and signature verification tests.
-- Atomic pointer swap and rollback safety tests.
-
-### CI updates
-- Add promotion gate test set.
-
-### Acceptance
-- Promotion fails with explicit reasons when gates are not met.
-- Promotion success writes complete bundle and updates active pointer atomically.
-
-## 9) Phase 8: Live Inference Integration (Milestone H)
-
-### Goals
-- Integrate ML predictions into 15m live decision pipeline.
-
-### Deliverables
-- Runtime bundle loader and integrity validator.
-- 15m bar-close scheduler.
-- Deterministic blend combiner (`0.7/0.3`, fallback global-only).
-- `qtbot predict --symbol <SYM> --at latest` debug command.
-
-### Module boundaries
-- `inference/bundle_loader.py`
-- `inference/combiner.py`
-- `inference/predictor.py`
-- runner integration layer
-
-### Schema/interface changes
-- Extend decision logs with prediction fields and gating reasons.
-- Maintain compatibility with existing runtime tables and lifecycle controls.
+### Implementation
+- Add `qtbot promote --run <RUN_ID>` with gates:
+- `min_folds >= 12`
+- `trade_count >= 200`
+- `max_drawdown <= 25%`
+- net PnL after costs positive
+- slippage stress remains net positive
+- Emit bundle at `models/bundles/<BUNDLE_ID>/` containing:
+- `manifest.json`
+- `global_model.txt`
+- `per_coin/*.txt`
+- `feature_spec.json`
+- `thresholds.json`
+- `cost_model.json`
+- `signature.sha256`
+- Update `models/bundles/LATEST` atomically.
+- Persist `promotions` table entry.
 
 ### Tests
-- Inference determinism tests.
-- Observe-only startup when bundle invalid.
-- Entry/exit threshold behavior tests.
-- Integration tests for bar-close-only execution.
+- Gate pass/fail matrix tests.
+- Bundle integrity/signature tests.
+- Atomic pointer update tests.
 
-### CI updates
-- Add runtime inference tests in dry-run/observe-only mode.
+### Exit criteria
+- Promotions are deterministic and auditable.
 
-### Acceptance
-- Runtime decisions occur only on closed 15m bars.
-- Invalid bundle blocks order path and keeps system in observe-only.
+## Step 9: Add Runtime Model Loading and Predict Debug Command
 
-## 10) Phase 9: Staging/Cutover Upgrade and Migration Closure (Milestone I)
+### Goal
+Load active bundle in runtime and expose deterministic prediction debugging.
 
-### Goals
-- Upgrade operational validation and complete migration from fixed-rule path.
-
-### Deliverables
-- Extend `qtbot staging-validate` to test data->features->model->decision path.
-- Extend `qtbot cutover-checklist` for model readiness gates.
-- Add `qtbot set-active-bundle <BUNDLE_ID>` rollback command.
-- Ensure runbook and docs match final shipped behavior.
-
-### Module boundaries
-- staging and cutover modules enhanced with ML checks.
-- rollback and active-bundle management module.
-
-### Schema/interface changes
-- Promotion and active-bundle events persisted for auditability.
+### Implementation
+- Add bundle loader with integrity checks.
+- Add `qtbot model-status`.
+- Add `qtbot predict --symbol <SYM> --at latest`.
+- Extend preflight with ML checks:
+- bundle integrity
+- feature-spec compatibility
+- warmup coverage
+- bar alignment/clock sanity
+- Failure behavior default:
+- enter observe-only mode, block order placement.
 
 ### Tests
-- End-to-end staging validation test with mocked model bundle.
-- Cutover checklist tests for model integrity/data warmup failures.
-- Rollback command tests requiring paused state.
+- Invalid bundle -> observe-only startup test.
+- Model-status/predict command tests.
 
-### CI updates
-- Add offline ML staging/cutover command checks.
-- Preserve existing docker validation job.
+### Exit criteria
+- Runtime can inspect and safely load active bundle.
 
-### Acceptance
-- Staging and cutover report ML readiness reliably.
-- Rollback path is deterministic and operator-safe.
+## Step 10: Integrate 15m Bar-Close Inference and Blend Logic
 
-## 11) Migration Path: Fixed-Rule to ML Runtime
+### Goal
+Replace legacy decision engine with ML inference path (while preserving safety shell).
 
-### Stepwise migration policy
-1. Keep existing runtime shell and risk systems intact.
-2. Introduce new data/training/eval stack offline first.
-3. Enable ML inference in observe-only mode.
-4. Promote first bundle only after gates pass.
-5. Enable live execution with ML decisions after staging and cutover pass.
-6. Deactivate fixed-rule strategy code path once rollback command and observe-only safeguards are validated.
+### Implementation
+- Decision loop remains 60s.
+- Predictions and decisions only on new closed 15m bars.
+- Implement deterministic blend:
+- if per-coin coverage sufficient: `p = 0.7*p_coin + 0.3*p_global`
+- else `p = p_global`
+- Default thresholds:
+- entry `0.60`
+- exit `0.48`
+- Respect BTC/ETH lock default and liquidity/cooldown/risk gates.
 
-### Compatibility constraints
-- `qtbot` command identity remains unchanged.
-- Existing lifecycle operations remain stable.
-- Existing risk controls remain active across migration.
+### Tests
+- Bar-close-only decision trigger tests.
+- Blend determinism tests.
+- Threshold transition tests (`ENTER`, `EXIT`, `HOLD`).
 
-## 12) Test Strategy (Cross-Phase)
+### Exit criteria
+- Runtime decisions are deterministic and 15m-aligned.
 
-Mandatory test coverage themes:
-- deterministic transforms and model outputs
-- data-quality and leakage prevention
-- reconciliation and safety gate behavior
-- promotion and rollback correctness
-- control-plane and graceful shutdown under new ML path
+## Step 11: Add Rollback Command and Finalize Live Activation
 
-Minimum acceptance for merge:
-- all tests pass
-- coverage gate maintained or improved
-- CI green for both standard and docker jobs
+### Goal
+Provide operator-safe rollback and controlled live enablement.
 
-## 13) Completion Criteria
+### Implementation
+- Add `qtbot set-active-bundle <BUNDLE_ID>`.
+- Enforce paused-state requirement before pointer change.
+- Keep previous bundles; never delete on promotion.
+- Log rollback and promotion events.
+- Maintain market-order only and full risk guard enforcement.
 
-Program considered complete when:
-1. 15m data and coverage tooling are production-ready.
-2. Snapshot and feature pipelines are reproducible.
-3. Walk-forward LightGBM training/evaluation runs deterministically.
-4. Promotion gates and bundle contracts are enforced.
-5. Live runtime uses promoted bundle on bar-close with deterministic decisions.
-6. Observe-only fallback, rollback, staging, and cutover checks are all operational.
-7. Docs and runbook exactly match shipped interfaces and behavior.
+### Tests
+- Rollback blocked unless paused.
+- Post-rollback model-status correctness.
+
+### Exit criteria
+- Operators can switch active bundle safely and deterministically.
+
+## Step 12: Upgrade Staging and Cutover to ML Readiness
+
+### Goal
+Guarantee end-to-end validation before production ML launch.
+
+### Implementation
+- Extend `qtbot staging-validate` to include:
+- sample backfill check
+- feature generation check
+- bundle load + inference check
+- simulated decision cycles
+- Extend `qtbot cutover-checklist` ML checks.
+- Update runbook and docs with final commands/procedures.
+
+### Tests
+- Offline staging/cutover ML-mode tests in CI.
+- Full end-to-end dry-run test path.
+
+### Exit criteria
+- Staging and cutover report green for ML path.
+
+## 5) Final Production Go-Live Sequence (Operator)
+
+When Steps 0-12 are complete, use this sequence:
+
+1. Backfill and verify data coverage.
+2. Build snapshot for latest closed bar.
+3. Train and evaluate walk-forward run.
+4. Promote only if gates pass.
+5. Verify active bundle via `model-status`.
+6. Run staging validation (ML path).
+7. Run cutover checklist.
+8. Start bot with constrained live budget.
+9. Monitor first cycles and confirm logs/risk behavior.
+10. Keep rollback command ready with prior bundle IDs.
+
+## 6) Required CI End-State
+
+CI must pass all of these on push/PR:
+- compile + unit/integration tests + coverage gate
+- offline staging validation (ML-aware)
+- offline cutover checklist (ML-aware)
+- docker build + container CLI checks
+- migration/regression tests for deterministic snapshot/training/inference outputs
+
+## 7) “Fully Usable” Acceptance Checklist
+
+All must be true:
+- [ ] 15m data backfill/status commands are stable and deterministic.
+- [ ] Snapshot hashes reproduce for same as-of/source.
+- [ ] Walk-forward runs persist deterministic fold metrics.
+- [ ] Promotion gates enforce conservative profile exactly.
+- [ ] Runtime uses promoted bundle with 15m bar-close decisions.
+- [ ] Observe-only mode triggers correctly on ML readiness failures.
+- [ ] Rollback command is safe and tested.
+- [ ] Staging and cutover ML checks pass in CI and locally.
+- [ ] Runbook procedures match actual command behavior.
+
+Once this checklist is fully green, the system is considered production-grade ML and fully usable.
