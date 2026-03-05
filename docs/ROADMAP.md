@@ -1,429 +1,470 @@
-# Final Roadmap + Instruction File: Minimal, Reliable CLI Quant Crypto Trader (NDAX, CAD, Spot-Only, Live)
+# SimpleQuantTrade Roadmap v2
 
-This file instructs an AI agent to implement a **simple fixed-rule** quantitative crypto trading system that runs as a **command-line bot** on **NDAX**, using **CAD** only, with **live evaluation at the smallest practical cadence**, and **graceful pause/stop** from another terminal.
+This document is the authoritative system specification for SimpleQuantTrade.
 
-The agent may modify project structure/files as needed, but MUST preserve all constraints and behaviors below.
+Scope of this roadmap:
+- Upgrade path from fixed-rule 1m strategy to ML-driven 15m strategy.
+- Production-grade operational behavior on NDAX.
+- Deterministic data, training, promotion, and live inference contracts.
 
----
+Legacy 1m EMA/ATR behavior is archived in `docs/LEGACY_FIXED_RULE_ARCHIVE.md` and is not the active target architecture.
 
-## 0) Hard Requirements (Non-Negotiable)
+## 0) Non-Negotiable Invariants
 
-### Exchange / credentials
-- Exchange: **NDAX**
-- Load credentials from `.env`:
-  - `NDAX_API_KEY`
-  - `NDAX_API_SECRET`
-  - `NDAX_USER_ID` (required for authenticated private calls such as balances)
-  - `NDAX_USERNAME` (optional helper for user/account lookup calls)
+### Exchange and account model
+- Exchange is NDAX only.
+- Trading is spot-only; no leverage, margin, borrowing, or shorting.
+- Bot operates in CAD budget constraints through virtual sub-account accounting and exchange-balance reconciliation.
+- NDAX remains source of truth for balances and holdings.
 
-### Spot-only (no borrowing)
-- **Spot trading only**
-- **No margin, no leverage, no shorting**
-- Only buy/sell assets using available CAD and held crypto.
+### Operational safety
+- Control plane must support `start`, `pause`, `resume`, `stop`, and `status`.
+- Startup must be reconciliation-first.
+- Live order path must be blocked by preflight if safety checks fail.
+- Risk controls remain mandatory:
+- daily loss cap
+- slippage guard
+- consecutive-error kill-switch
+- Runtime logs are append-only.
+- Docker and staging validation remain first-class operational requirements.
 
-### Budget model (virtual sub-account)
-- `--budget` specifies an **initial CAD allocation** that the bot is allowed to deploy.
-- The bot must behave like it has a separate sub-account:
-  - It must never spend more CAD than the bot’s internal `bot_cash_cad`.
-  - `bot_cash_cad` starts as `initial_budget_cad` and changes with trades.
-- The bot may reuse profits (i.e., if bot grows, it can deploy more than the initial CAD later).  
-  Implementation: bot is capped only by its own internal cash + proceeds, not by the original amount.
+### Execution model
+- Market orders only.
+- Live trading must remain gated behind explicit enable flag.
+- Deterministic behavior is required in strategy, training, and runtime decision flow.
 
-### Tradable universe
-- Only trade the hardcoded “top 20 market coins” list in code (includes BTC and ETH).
-- All symbols in the configured top-20 list are eligible when NDAX CAD spot pairs are available.
-- Only trade coins that have a **CAD spot pair** on NDAX.
-- If a configured coin has no CAD pair on NDAX, skip and log.
+## 1) Target End-State Architecture
 
-### Fees (must be applied)
-- Assume taker fees:
-  - **0.2% per side**
-  - **0.4% round-trip**
-- Fee must be deducted from PnL and tracked.
+### 1.1 Data layer
+- Canonical candle storage:
+- `data/raw/ndax/15m/<SYMBOL>.parquet`
+- Snapshot storage:
+- `data/snapshots/<SNAPSHOT_ID>/`
+- Runtime metadata and bot state:
+- `runtime/state.sqlite`
+- Runtime controls and logs:
+- `runtime/control.json`
+- `runtime/logs/`
 
-### Live-only
-- No backtest required.
-- Bot runs continuously, using live data and placing live orders.
+### 1.2 Training layer (offline)
+- Snapshot builder with deterministic dataset hashing.
+- Deterministic feature pipeline.
+- Walk-forward orchestrator.
+- LightGBM trainers:
+- per-coin model
+- global pooled model
+- Cost-aware evaluator aligned to live constraints.
+- Promotion gate engine.
+- Bundle publisher with integrity signature.
 
-### Control from another terminal (graceful)
-- Must support:
-  - start live trading
-  - pause
-  - resume
-  - stop (graceful; persist state and exit cleanly)
-- Pause/stop must not abruptly kill the process.
+### 1.3 Inference layer (live)
+- Load active promoted bundle from `models/bundles/LATEST`.
+- Compute features on each closed 15m bar.
+- Produce per-symbol prediction using global and optional per-coin model.
+- Blend predictions deterministically and apply signal/risk/execution gates.
 
----
+## 2) Model Bundle Contract
 
-## 1) CLI Commands (Minimal UX)
+Promoted bundle path:
+- `models/bundles/<BUNDLE_ID>/`
 
-Command name: `qtbot`
+Required bundle files:
+- `manifest.json`
+- `global_model.txt`
+- `per_coin/<SYMBOL>.txt` (optional per symbol)
+- `feature_spec.json`
+- `thresholds.json`
+- `cost_model.json`
+- `signature.sha256`
 
-Required commands:
+Optional bundle files:
+- `calibration/<MODEL>.json` (for calibration artifacts)
 
-1) Start (budget must be set before running)
+`manifest.json` minimum fields:
+- `bundle_id`
+- `created_at_utc`
+- `code_version`
+- `config_hash`
+- `dataset_hash`
+- `feature_spec_hash`
+- `training_window`
+- `walk_forward`
+- `lgbm_params`
+- `metrics_summary`
+
+Active-bundle pointer contract:
+- Pointer lives at `models/bundles/LATEST`.
+- Pointer update must be atomic.
+- Rollback must be possible without deleting prior bundles.
+
+## 3) Universe Policy (Universe V1)
+
+Universe V1 is fixed and explicit:
+- `BTC, ETH, XRP, SOL, ADA, DOGE, AVAX, LINK, DOT, BCH, LTC, XLM, TON, UNI, NEAR, ATOM, HBAR, AAVE, ALGO, APT, ARB, FET, FIL, ICP, INJ, OP, SUI, TIA, RUNE, SEI`
+
+Runtime eligibility rules:
+- Trade only symbols with active NDAX CAD spot pair.
+- Missing CAD pair must be skipped and logged, not treated as fatal.
+
+BTC/ETH lock policy:
+- `QTBOT_BTC_ETH_LOCK=true` by default.
+- When lock is enabled, BTC and ETH are excluded from entry/exit execution.
+- BTC may still be used as market-context feature.
+- Lock override requires explicit config change and successful staging validation.
+
+## 4) Timeframe and Live Loop Behavior
+
+### 4.1 Timeframe
+- Feature generation, training labels, and inference use 15m bars.
+- `QTBOT_TIMEFRAME=15m` is required default.
+
+### 4.2 Loop cadence
+- Runtime loop cadence stays 60 seconds for control-plane responsiveness.
+- Trading decisions execute only on new closed 15m bars.
+
+### 4.3 Bar-close processing
+- Maintain `last_processed_bar_ts` per symbol.
+- On each loop:
+- fetch latest candle window
+- detect newly closed 15m bar
+- if no new close, skip prediction for symbol
+- if new close exists, run feature -> inference -> gating -> decision
+
+### 4.4 Frequency controls
+- Cooldown after exit remains enabled, default 30 minutes.
+- Trade on state transitions only (`ENTER` or `EXIT`), not every loop.
+- `max_new_entries_per_cycle` remains enforced for operational burst control.
+
+## 5) Data Acquisition and Snapshotting
+
+### 5.1 Data source and ingestion
+- Primary source is NDAX public candle endpoint.
+- Backfill in chunks with retry/backoff and deterministic deduping.
+- Timestamps must be normalized to exact 15m boundaries.
+
+### 5.2 Storage policy
+- Primary persisted market data format is Parquet.
+- SQLite remains authoritative for runtime and training metadata tables.
+
+### 5.3 Sealed snapshot contract
+Snapshot ID must encode:
+- `asof_bar_close_utc`
+- `universe_hash`
+- `schema_version`
+
+Snapshot output must include:
+- immutable manifest
+- candle file manifest and checksums
+- deterministic dataset hash over ordered rows
+
+Reproducibility rule:
+- Running snapshot builder with same `asof` and same source data must produce same `dataset_hash`.
+
+## 6) Feature and Label Specification
+
+### 6.1 Feature rules
+- Historical-only features (no leakage).
+- Deterministic windows and transforms.
+- Deterministic missing-value handling.
+
+### 6.2 Feature family targets
+Target: 50 to 80 features from:
+- returns/momentum
+- volatility/range
+- trend strength
+- mean-reversion
+- volume dynamics
+- market context
+
+Each bundle must carry exact feature contract in `feature_spec.json`:
+- feature names
+- windows
+- transformations
+- null/imputation policy
+- required warmup bars
+
+### 6.3 Labeling (V1)
+- Binary classification target with cost-aware threshold.
+- For each sample:
+- `forward_return`
+- `y`
+
+Definition:
+- `y = 1` if next-bar forward return is above cost-adjusted threshold, else `0`.
+- Threshold must incorporate fees, slippage buffer, and safety margin.
+
+## 7) Training and Walk-Forward Validation
+
+### 7.1 Model family
+- LightGBM only for V1.
+- Per-coin model trained on symbol-local data.
+- Global model trained on pooled universe data.
+
+### 7.2 Determinism controls
+- Fixed random seed.
+- Fixed dataset snapshot.
+- Fixed feature spec hash.
+- Fixed fold boundaries.
+- Hyperparameters logged in manifest.
+
+### 7.3 Walk-forward default
+Default scheme:
+- train window: trailing 12 months
+- validation window: next 1 month
+- step: 1 month
+
+Per fold outputs:
+- fold boundaries
+- prediction logs
+- simulated trade logs
+- metrics summary
+
+## 8) Evaluator and Cost Model
+
+Evaluator must align with live constraints:
+- market orders only
+- cooldown behavior
+- max new entries per cycle
+- CAD budget and exchange-availability checks
+- risk halts (daily loss/slippage/error)
+
+Default fee baseline:
+- `QTBOT_FEE_PCT_PER_SIDE=0.002` (0.2% per side)
+
+Slippage model:
+- configurable (`QTBOT_SLIPPAGE_MODEL`)
+- support fixed-bps baseline and volatility-aware variant
+
+Minimum evaluation outputs:
+- net PnL after fees/slippage
+- max drawdown
+- trade count
+- win rate
+- profit factor
+- turnover
+- fold stability metrics
+- per-coin concentration and worst-coin analysis
+- slippage stress test (+50% slippage)
+
+## 9) Promotion Gates
+
+Promotion command may only publish bundle if gates pass.
+
+### 9.1 Hard gates
+- fold count >= 12
+- no data-quality/leakage violations
+- aggregate net PnL > 0 after costs
+- max drawdown <= 25%
+- trade count >= 200
+- slippage stress test remains net positive
+
+### 9.2 Soft checks
+- fold stability not concentrated in a single period
+- worst-coin loss not catastrophic by configured threshold
+- acceptable fold-variance profile
+
+### 9.3 Promotion side effects
+- write bundle at `models/bundles/<BUNDLE_ID>/`
+- atomically update `models/bundles/LATEST`
+- append promotion record to SQLite and runtime logs
+- optional Discord promotion alert
+
+## 10) Deterministic Blend and Signal Thresholds
+
+Prediction blend:
+- if per-coin model exists with sufficient coverage:
+- `p = 0.7 * p_coin + 0.3 * p_global`
+- otherwise:
+- `p = p_global`
+
+Default thresholds (conservative profile):
+- `entry_threshold = 0.60`
+- `exit_threshold = 0.48`
+
+Thresholds and weight rules must be recorded in bundle `thresholds.json`.
+
+## 11) Live Trading Logic (ML-Driven)
+
+### 11.1 Entry conditions
+Enter long only when all pass:
+- symbol is allowed and NDAX CAD pair exists
+- BTC/ETH lock policy respected
+- no open position
+- cooldown satisfied
+- liquidity/spread proxy passes
+- blended probability >= entry threshold
+- optional edge-over-cost gate passes
+- risk manager allows new entries
+
+### 11.2 Exit conditions
+Exit when any pass:
+- blended probability <= exit threshold
+- stop/trailing stop condition triggers
+- risk halt or operator pause/stop
+
+### 11.3 Position sizing
+- Volatility-aware notional sizing.
+- Cap by:
+- max notional per trade
+- max total exposure
+- fee reserve buffer
+- available CAD (`min(bot_cash_cad, ndax_available_cad)`)
+
+### 11.4 Safe startup failure behavior
+If bundle integrity or model preflight fails:
+- block order placement
+- run observe-only mode (control plane + logs active)
+
+## 12) Preflight Extensions (ML Readiness)
+
+In addition to existing operational checks, live preflight must validate:
+- active bundle exists and signature is valid
+- runtime code supports bundle feature spec version
+- required candle warmup coverage exists for active universe
+- bar-close alignment and clock sanity
+
+Any failed safety-critical preflight check blocks live order path.
+
+## 13) CLI Contract
+
+### 13.1 Existing commands retained
 - `qtbot start --budget <CAD>`
-
-2) Pause / Resume / Stop (usable while bot is running, from another terminal)
 - `qtbot pause`
 - `qtbot resume`
 - `qtbot stop`
-
-3) Status (works whether bot is running or not)
 - `qtbot status`
+- `qtbot ndax-pairs`
+- `qtbot ndax-candles --symbol <NDAX_SYMBOL> --from-date YYYY-MM-DD --to-date YYYY-MM-DD`
+- `qtbot ndax-balances`
+- `qtbot ndax-check`
+- `qtbot staging-validate`
+- `qtbot cutover-checklist`
+
+### 13.2 New command surface (v2 target)
+Data:
+- `qtbot data-backfill --from YYYY-MM-DD --to YYYY-MM-DD --timeframe 15m`
+- `qtbot data-status`
+
+Training/evaluation:
+- `qtbot build-snapshot --asof YYYY-MM-DDTHH:MMZ`
+- `qtbot train --snapshot <SNAPSHOT_ID> --folds <N> --universe V1`
+- `qtbot eval --run <RUN_ID>`
+- `qtbot promote --run <RUN_ID>`
+
+Model/runtime:
+- `qtbot model-status`
+- `qtbot predict --symbol <SYM> --at latest`
+- `qtbot set-active-bundle <BUNDLE_ID>`
+
+All commands must operate in local runtime and Docker (`docker compose exec`).
+
+## 14) SQLite Schema Extensions
+
+Existing runtime tables remain; add:
+- `training_runs`
+- `training_folds`
+- `fold_metrics`
+- `promotions`
+- `data_coverage`
+
+Schema requirements:
+- append-only or versioned writes
+- atomic transaction boundaries
+- migration-safe evolution
+
+## 15) Data Quality Gates
+
+Training and live preflight must enforce:
+- monotonic timestamps per symbol
+- no duplicate candle primary keys
+- gap detection with configured thresholds
+- minimum history coverage for feature warmup
+- exact 15m boundary normalization
+- consistent UTC handling
+
+Hard-gate failures must abort training and block live order path.
+
+## 16) Config Surface and Defaults
+
+New/standardized settings:
+- `QTBOT_TIMEFRAME=15m`
+- `QTBOT_UNIVERSE=V1`
+- `QTBOT_BTC_ETH_LOCK=true`
+- `QTBOT_MODEL_BUNDLE_PATH=models/bundles/LATEST`
+- `QTBOT_ENTRY_THRESHOLD=0.60`
+- `QTBOT_EXIT_THRESHOLD=0.48`
+- `QTBOT_SLIPPAGE_MODEL=fixed_bps`
+- `QTBOT_FEE_PCT_PER_SIDE=0.002`
+- `QTBOT_FEATURE_SPEC_VERSION=v1`
+
+Keep existing runtime and risk settings unless explicitly superseded.
+All defaults must be defined in one config module.
+
+## 17) Milestones and Acceptance
+
+### Milestone A: 15m data layer
+- Deliver backfill and `data-status` with coverage/gap reporting.
+- Acceptance: deterministic candle keys, best-effort full backfill with per-symbol status.
+
+### Milestone B: feature pipeline
+- Deliver deterministic ~60-feature generator and feature spec output.
+- Acceptance: deterministic reruns and valid warmup/no steady-state NaNs.
+
+### Milestone C: snapshot builder
+- Deliver sealed snapshot manifest and dataset hash.
+- Acceptance: identical hash for identical input/as-of.
+
+### Milestone D: walk-forward orchestration
+- Deliver fold generation/slicing and run tracking.
+- Acceptance: reproducible folds and logged boundaries.
+
+### Milestone E: LightGBM trainer
+- Deliver per-coin and global trainers with fixed baseline params.
+- Acceptance: deterministic artifacts given fixed seed/snapshot.
+
+### Milestone F: evaluator
+- Deliver cost-aware simulation and fold/aggregate metrics.
+- Acceptance: fees/slippage enforced and output stable.
+
+### Milestone G: promotion and bundle publisher
+- Deliver gate engine, publisher, and atomic LATEST update.
+- Acceptance: failed gates block promotion with explicit reasons.
+
+### Milestone H: live inference integration
+- Deliver bar-close inference, deterministic blend, and ML signal gating.
+- Acceptance: observe-only and live paths both deterministic and safety-compliant.
+
+### Milestone I: staging and cutover upgrade
+- Deliver end-to-end ML staging validation and cutover checks.
+- Acceptance: data->feature->inference->decision path validated before live launch.
 
-### Control mechanism
-Use a local control record (file or SQLite flag). Recommended simplest:
-- `runtime/control.json` with:
-  - `{ "command": "RUN" | "PAUSE" | "STOP" }`
-
-Rules:
-- `pause/resume/stop` update `runtime/control.json` atomically.
-- Running bot checks this command each loop and behaves accordingly.
-- STOP must:
-  - stop placing new orders
-  - persist state and logs
-  - exit cleanly
-
----
-
-## 2) Live Evaluation Cadence (Smallest Practical)
-
-Goal: “evaluate the market live” at the smallest reasonable cadence.
-
-### Execution plan (two time scales)
-- **Polling / evaluation loop**: every **60 seconds**.
-- **Signal timeframe**: use **1-minute candles** for core signals (since user wants smallest possible).
-- To reduce noise-induced churn while still evaluating every minute, enforce:
-  - **No re-entry into the same asset within a cooldown window** after exit (default 30 minutes).
-  - **Trade only on state changes** (signal flips), not every minute.
-
-This preserves “live evaluation” but avoids spamming orders.
-
----
-
-## 3) Strategy (Fixed Simple Rules, No ML)
-
-### Summary
-Long-only spot strategy using:
-- short/long EMA trend
-- ATR-based stop loss
-- time-based exit (since holding is hours to days)
-
-### Indicators (1-minute candles)
-- `EMA_fast = 60`   (approx 1 hour on 1m data)
-- `EMA_slow = 360`  (approx 6 hours on 1m data)
-- `ATR = 60`        (approx 1 hour ATR on 1m data)
-
-(These are deliberately larger than typical 1m scalping settings to align with “hours to days” holding while still evaluating on 1m.)
-
-### Entry (buy) conditions for a coin
-Enter long if ALL are true:
-1) Coin is in allowed universe and has CAD pair
-2) Not currently holding that coin (qty == 0)
-3) Trend up: `EMA_fast > EMA_slow`
-4) Pullback: `close <= EMA_fast` (price at/below fast EMA)
-5) Cooldown satisfied (no exit from this coin within last `COOLDOWN_MINUTES`, default 30)
-
-### Exit (sell) conditions
-Exit if ANY are true:
-1) Trend break: `EMA_fast < EMA_slow`
-2) Stop loss: `close < entry_price - STOP_K * ATR`, default `STOP_K = 2.5`
-3) Time stop: holding duration > `MAX_HOLD_HOURS`, default 48 hours
-
-### Position selection when multiple entries appear
-Because user wants **no max positions limit** and **no per-coin cap**, the bot can deploy all available CAD.
-Still, the bot needs deterministic allocation logic.
-
-Use this simple deterministic policy:
-- Compute an “entry score” for each candidate coin:
-  - `score = (EMA_fast - EMA_slow) / close`  (relative trend strength)
-- Sort candidates by score descending.
-- Allocate available bot cash equally across all candidates that pass filters **up to a practical cap of N candidates per cycle** to avoid placing too many orders at once.
-  - Default `MAX_NEW_ENTRIES_PER_CYCLE = 3` (operational safety; not a portfolio limit)
-- For each selected coin, buy with:
-  - `order_notional = bot_cash_cad / remaining_candidates`
-- Continue until either:
-  - no more candidates, or
-  - bot_cash_cad falls below NDAX minimum order threshold + fees.
-
-Note: This does not limit total positions overall; it only limits how many *new* buys are attempted in one minute to avoid API/order bursts.
-
----
-
-## 4) Budget & Accounting (Virtual Sub-Account Ledger)
-
-### Internal ledger fields (minimum)
-Persist:
-- `initial_budget_cad`
-- `bot_cash_cad`
-- positions table:
-  - `symbol`
-  - `qty`
-  - `avg_entry_price`
-  - `entry_time`
-  - `last_exit_time` (for cooldown)
-- totals:
-  - `realized_pnl_cad`
-  - `unrealized_pnl_cad` (computed live)
-  - `fees_paid_cad`
-
-### Fee handling (assumed)
-For each filled trade:
-- Buy fee: `fee = 0.002 * notional_cad`
-- Sell fee: `fee = 0.002 * notional_cad`
-
-Accounting:
-- Buy:
-  - `bot_cash_cad -= notional + fee`
-  - position qty increases
-- Sell:
-  - `bot_cash_cad += proceeds - fee`
-  - realized pnl computed against average cost basis
-
-### Relationship to real NDAX balances
-The bot must also ensure it never attempts to spend more CAD than NDAX actually has available.
-Rule:
-- `order_notional <= min(bot_cash_cad, ndax_available_cad)` after reserving estimated fees.
-
----
-
-## 5) Live Trading & Execution (Simple, Reliable)
-
-### Order type
-- Market orders only (simplest, reduces fill uncertainty).
-
-### Execution steps per order
-1) Check control command is still RUN
-2) Compute order size (notional CAD) with fee buffer
-3) Place market order
-4) Fetch order status / fills
-5) Confirm filled quantity and average fill price
-6) Update ledger + state
-7) Append to `trades.csv`
-
-### Operational safety
-- API retry with exponential backoff on transient failures.
-- Idempotency:
-  - If the bot crashes after placing an order, on restart it must reconcile holdings before trading again.
-- Live-mode preflight gate before any order placement:
-  - validate credentials/authentication,
-  - validate NDAX API reachability,
-  - validate tradable CAD market coverage,
-  - validate candle warm-up sufficiency for strategy indicators (coverage threshold, default 0.8),
-  - validate state DB read/write health,
-  - validate control-file integrity.
-  - If any preflight check fails, the bot must block live startup and surface exact failed checks.
-
----
-
-## 6) State Persistence (Required for Pause/Resume/Stop)
-
-### Storage
-Preferred: `runtime/state.sqlite` (single-file DB).
-Acceptable: `runtime/state.json` if atomic write is implemented (temp file + rename + fsync).
-
-### Must persist on:
-- end of every loop iteration
-- immediately upon transitioning to PAUSE
-- immediately before exiting on STOP
-
-### Resume behavior
-On start:
-1) If prior state exists and control is not STOPPED, load it
-2) Sync NDAX balances for all tradable coins
-3) Reconcile:
-   - If NDAX holdings differ from internal positions, treat NDAX as truth:
-     - update internal positions to match NDAX
-     - log a reconciliation event
-4) Do not place trades until reconciliation completes successfully
-
----
-
-## 7) Logging (Append-Only)
-
-Write logs into `runtime/logs/`:
-
-1) `qtbot.log` (human-readable)
-- loop timing
-- control state changes
-- errors/retries
-- reconciliation notes
-- risk/preflight state transitions
-
-2) `trades.csv`
-Columns (minimum):
-- timestamp
-- symbol
-- side
-- qty
-- avg_price
-- notional_cad
-- fee_cad
-- order_id
-
-3) `decisions.csv`
-Columns (minimum):
-- timestamp
-- symbol
-- close
-- ema_fast
-- ema_slow
-- atr
-- signal (ENTER / EXIT / HOLD)
-- reason
-
-4) Optional Discord alerts (webhook-driven)
-- lifecycle `PAUSE` / `STOP` transitions
-- repeated API/execution failures
-- reconciliation anomalies
-- risk-triggered halts
-
----
-
-## 8) Universe Definition (Hardcoded Top 20, CAD-Validated)
-
-The agent must:
-- Provide a hardcoded list of 20 tickers in config (includes BTC, ETH).
-- Map tickers to NDAX market/pair symbols.
-- Validate CAD pair existence at startup:
-  - if missing, skip coin
-- Do not apply BTC/ETH-specific exclusions.
-
----
-
-## 9) Recommended Minimal Implementation Layout (Agent May Change)
-
-Suggested components:
-- `cli` (commands, control updates)
-- `runner` (main loop)
-- `ndax_client` (API wrapper)
-- `strategy` (indicators + signals)
-- `execution` (orders + fill confirmation)
-- `state` (persistence + reconciliation)
-- `ledger` (PnL + fee accounting)
-- `universe` (symbols + CAD pair validation)
-- `logging`
-- `alerts` (Discord operational notifications)
-
----
-
-## 10) Development Milestones (Deliver in This Order)
-
-### M1: CLI + Control Plane + Persistence
-- Implement `start/pause/resume/stop/status`
-- Implement `runtime/control.json`
-- Implement persistent state store and atomic updates
-Acceptance:
-- start runs a loop and writes logs/state every minute
-- pause/resume/stop works from another terminal and is graceful
-
-### M2: NDAX Integration
-- Load `.env`
-- Fetch balances
-- Fetch OHLC candles (1m)
-- Validate CAD pairs for universe
-Acceptance:
-- bot can list tradable CAD pairs and pull candle history reliably
-
-### M3: Strategy Signals (Dry Run)
-- Compute EMA/ATR
-- Generate ENTER/EXIT decisions
-- Write decisions.csv
-Acceptance:
-- bot makes consistent decisions but does not trade yet (feature flag)
-
-### M4: Live Execution + Ledger
-- Place market orders
-- Confirm fills
-- Update state/ledger
-- Track fees
-Acceptance:
-- bot trades live and accounting remains consistent
-
-### M5: Hardening
-- robust retries/backoff
-- reconciliation on restart
-- duplicate prevention
-- enforce budget/risk constraints consistently
-Acceptance:
-- bot can survive transient API failures and can resume after pause/stop without losing state
-
-### M6: Go-Live Validation Gate
-- Add deterministic go-live preflight checks before entering live loop.
-- Block live startup if any safety-critical check fails.
-- Persist and log preflight outcomes for operations review.
-Acceptance:
-- failed preflight blocks live order path with explicit failed checks
-- successful preflight is required before live execution can run
-
-### M7: Risk Hardening
-- enforce daily loss cap with auto-pause
-- enforce slippage guard with auto-pause
-- enforce consecutive error kill-switch
-Acceptance:
-- risk constraints consistently block unsafe live execution paths
-
-### M8: Logging + Discord Alerting
-- keep append-only runtime logs for loop/decisions/trades
-- send Discord alerts for lifecycle, failure, reconciliation, and risk-halt events
-Acceptance:
-- operator receives actionable operational alerts without blocking trading process safety paths
-
-### M9: Docker Production Packaging
-- build Python 3.11 production image with `qtbot` entrypoint
-- add `docker-compose` service using `.env` + persistent `runtime/` volume
-- document container lifecycle operations (`start`, `pause`, `resume`, `stop`, `status`)
-Acceptance:
-- reproducible container build and successful `qtbot status` execution in-container
-- compose deployment preserves runtime state/log artifacts across restarts
-- control-plane commands remain operable from another terminal via `docker compose exec`
-
-### M10: Staging Validation
-- add `qtbot staging-validate` control-plane command for operator-run staging checks
-- run continuous dry-run loop in isolated staging runtime against live NDAX public data
-- exercise `pause/resume/stop` lifecycle commands while staging loop is active
-- execute explicit failure scenario checks (for example invalid symbol NDAX checks)
-- verify reconciliation and risk controls under deterministic simulated fault injections
-- persist machine-readable staging report to runtime logs
-Acceptance:
-- staging validation emits structured pass/fail report with per-step evidence
-- lifecycle and failure-path drills are reproducible from CLI
-- reconciliation and risk simulated-fault checks pass before production cutover
-
-### M11: Production Cutover Checklist
-- add `qtbot cutover-checklist` command to execute production-readiness gates
-- require recent successful staging report before launch approval
-- validate local control/state health and runbook presence (`docs/PRODUCTION_RUNBOOK.md`)
-- in live mode, validate NDAX private connectivity and go-live preflight pass
-- emit machine-readable cutover report with launch/rollback/manual-verification checklist
-Acceptance:
-- `cutover-checklist` reports green readiness before first production launch
-- runbook provides explicit rollback and incident response instructions
-- cutover report is persisted and auditable for operations review
-
----
-
-## 11) Defaults Summary (Chosen to Match “Fast Live Evaluation” + “Hours to Days Holding”)
-
-- Loop cadence: **60 seconds**
-- Candle timeframe: **1 minute**
-- EMA fast/slow: **60 / 360**
-- ATR length: **60**
-- Stop: **2.5 * ATR**
-- Time stop: **48 hours**
-- Cooldown after exit: **30 minutes**
-- Max new entries per cycle: **3** (operational burst control; not a portfolio limit)
-- Fee: **0.2% per side**
-- Go-live preflight warmup coverage threshold: **0.8**
-- Daily loss cap: **250 CAD**
-- Max slippage guard: **2%**
-- Consecutive error kill-switch limit: **3**
-- Discord alert timeout: **8s**
-- Discord alert retries: **2**
-- Discord webhook URL: unset by default (alerts disabled unless configured)
-- Docker compose startup budget (`QTBOT_START_BUDGET_CAD`): **1000 CAD**
-
-All defaults should be placed in a single config module/file.
-
----
+## 18) Done Definition
+
+Upgrade is done when all are true:
+1. 15m universe backfill and coverage reporting works.
+2. Snapshot hash is reproducible.
+3. Walk-forward training/evaluation outputs deterministic fold metrics.
+4. Promotion gates deterministically accept/reject runs.
+5. Live runtime loads active bundle and makes deterministic 15m bar-close decisions.
+6. Existing operational safety guarantees remain intact.
+
+## 19) Rollback and Safe Operation
+
+Rollback requirements:
+- keep last N promoted bundles
+- `set-active-bundle` requires trading paused
+- rollback updates pointer atomically and logs event
+
+Safe-mode requirements:
+- if bundle integrity/readiness fails, switch to observe-only mode
+- no new live orders while in observe-only
+- control plane and logging must continue
+
+## 20) Documentation Policy
+
+- `docs/ROADMAP.md` is primary specification.
+- `docs/PLAN.md` is implementation sequencing and delivery plan.
+- `docs/PRODUCTION_RUNBOOK.md` is operations procedure.
+- `docs/LEGACY_FIXED_RULE_ARCHIVE.md` is historical reference only.
+
+All architecture/interface changes must update these documents in the same change set.

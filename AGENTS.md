@@ -1,229 +1,138 @@
 # AGENTS.md
 
-This repository is intended to be developed and maintained by an AI coding agent.  
-The agent is responsible for **planning, implementing, improving, and maintaining** the project.
+This repository is developed and maintained by an AI coding agent.
+The agent is responsible for planning, implementation, reliability hardening, and documentation fidelity.
 
-The agent must follow the instructions below at all times.
+## 1) Primary Source of Truth
 
----
+Before any task, the agent must read:
+- `docs/ROADMAP.md`
 
-# 1. Always Read the Project Roadmap First
+`docs/ROADMAP.md` is the canonical specification and defines:
+- architecture
+- safety constraints
+- runtime behavior
+- CLI interfaces
+- data/training/inference contracts
+- rollout and operations expectations
 
-Before performing **any task**, the agent must:
+Legacy reference:
+- `docs/LEGACY_FIXED_RULE_ARCHIVE.md` is historical context only and is not the active target architecture.
 
-1. **Open and read `docs/ROADMAP.md`**
-2. Use it to understand:
-   - project goals
-   - constraints
-   - architecture
-   - rules
-   - operational behavior
-   - CLI requirements
-   - trading logic
-3. Treat `docs/ROADMAP.md` as the **primary specification** of the system.
+If user instructions conflict with the roadmap:
+1. ask for clarification, or
+2. update roadmap and companion docs when requirements are explicitly changed.
 
-If any user request conflicts with `docs/ROADMAP.md`, the agent should:
+## 2) Scope of Responsibility
 
-1. Ask for clarification **or**
-2. Update `docs/ROADMAP.md` if the user explicitly changes project requirements.
+The agent owns end-to-end lifecycle quality, including:
+- planning and architecture updates
+- implementation and refactoring
+- bug fixing and reliability improvements
+- observability and operational safety
+- documentation and CI alignment
 
-The roadmap must always represent the **current ground truth of the system design**.
+## 3) Repository Modification Permissions
 
----
-
-# 2. Agent Responsibilities
-
-The AI agent is responsible for the **entire lifecycle of the project**, including:
-
-### Planning
-- Interpreting user instructions
-- Updating architecture if necessary
-- Updating `docs/ROADMAP.md` when project scope changes
-
-### Implementation
-- Writing all code
-- Designing project structure
-- Creating modules, files, and folders as needed
-
-### Maintenance
-- Fixing bugs
-- Refactoring code
-- Improving reliability
-- Handling edge cases
-- Improving logging and observability
-
-### Problem Solving
-If the agent encounters:
-
-- runtime errors
-- API changes
-- library issues
-- logical bugs
-- performance problems
-- trading safety issues
-
-The agent must:
-
-1. Investigate the root cause
-2. Propose a fix
-3. Implement the fix
-4. Update documentation if necessary
-
----
-
-# 3. Repository Modification Permissions
-
-The agent has permission to **modify anything in the repository**, including:
-
-- project structure
-- file organization
-- modules
+The agent may modify any repository content when needed, including:
+- source code
+- docs
+- config
 - dependencies
-- documentation
-- configuration files
-- runtime logic
+- project structure
 
-The agent may:
+Constraints:
+- changes must remain consistent with `docs/ROADMAP.md`
+- CLI behavior and safety guarantees must remain coherent with roadmap contracts
 
-- create new files
-- delete obsolete files
-- reorganize directories
-- rename modules
-- improve architecture
-
-as long as:
-
-- the project continues to satisfy the **requirements defined in `docs/ROADMAP.md`**
-- the CLI interface remains consistent with the roadmap.
-
----
-
-# 4. Development Principles
-
-The agent must prioritize:
+## 4) Engineering Principles
 
 ### Reliability
-The trading system must behave consistently and safely.
+- preserve deterministic behavior
+- use robust error handling and retries for NDAX interactions
 
 ### Simplicity
-Avoid unnecessary complexity.  
-Prefer clear, deterministic logic over complicated abstractions.
-
-### Determinism
-Trading decisions must be reproducible and understandable.
+- prefer clear deterministic logic over unnecessary abstractions
 
 ### Safety
-The system must never:
+- never violate spot-only and CAD budget constraints
+- never bypass critical preflight or risk guards in live order path
 
-- borrow funds
-- exceed the allowed CAD budget
+### Graceful operation
+- preserve start/pause/resume/stop behavior
+- ensure clean shutdown with persisted state and logs
 
-These rules are defined in `docs/ROADMAP.md` and must always be enforced.
+## 5) Documentation Synchronization Rules
 
-### Graceful Operation
-The system must support:
+When architecture or interfaces change, the same change set must update documentation.
 
-- start
-- pause
-- resume
-- stop
-
-and must handle shutdown **gracefully**, preserving state and logs.
-
----
-
-# 5. Documentation Rules
-
-The agent must maintain documentation:
-
-### Required files
-- `docs/ROADMAP.md` — system design and specification
-- `AGENTS.md` — agent instructions
-
-If the system architecture changes significantly, the agent must update:
-
+Required docs:
 - `docs/ROADMAP.md`
-- any relevant documentation
+- `docs/PLAN.md`
+- `README.md`
+- `docs/PRODUCTION_RUNBOOK.md`
+- `AGENTS.md`
 
-Documentation must always match the real system.
+Additional rule:
+- if changing or adding ML interfaces (commands, config vars, bundle schema, snapshot contracts, promotion gates, DB tables), update roadmap and all affected docs before concluding task.
 
----
+## 6) Code Quality Expectations
 
-# 6. Code Quality Expectations
-
-The agent should ensure:
-
+The agent should maintain:
 - clear module boundaries
 - readable code
-- structured logging
-- robust error handling
-- retry logic for network/API operations
-- safe persistence of state
-- deterministic trading behavior
-- automated tests for all newly implemented or modified behavior
-- phase-appropriate CI workflow updates so tests run on push/pull request
+- structured logs
+- deterministic training and inference paths
+- safe persistent-state handling with atomic writes where required
+- tests for all new/changed behavior
+- CI updates so new tests run on push/pull request
 
-The agent should avoid fragile implementations.
+Avoid fragile or implicit behavior.
 
----
+## 7) State and Data Safety
 
-# 7. State and Data Safety
+The system must:
+- preserve runtime-state integrity
+- avoid silent corruption
+- reconcile against NDAX state on restart
+- maintain deterministic snapshot and model-bundle contracts
 
-The agent must ensure the system:
+Critical files and stores:
+- runtime DB (`runtime/state.sqlite`)
+- control state (`runtime/control.json`)
+- logs (`runtime/logs/*`)
+- data snapshots (`data/snapshots/*`)
+- model bundles (`models/bundles/*`)
 
-- never corrupts its persistent state
-- uses atomic writes for critical files
-- safely resumes after pause/stop/restart
-- reconciles exchange state when restarting
+## 8) When to Ask the User
 
-State integrity is critical.
+Ask for clarification if:
+- trading logic requirements are ambiguous
+- NDAX API behavior changes materially
+- a decision changes external behavior/contracts significantly
+- security or safety concerns require explicit approval
 
----
+Do not block progress when a safe and documented default exists.
 
-# 8. When the Agent Should Ask the User
+## 9) Continuous Improvement
 
-The agent should ask the user for clarification if:
+The agent is expected to continuously improve:
+- error handling
+- logging
+- safety checks
+- code structure
+- performance where it does not compromise determinism or safety
 
-- trading logic requirements are unclear
-- NDAX API behavior changes
-- a decision significantly changes system behavior
-- security concerns arise
+## 10) Operational Mindset
 
-The agent should **not block progress unnecessarily**, but should ensure correctness.
-
----
-
-# 9. Continuous Improvement
-
-The agent should continuously improve the system when appropriate, including:
-
-- better error handling
-- better logging
-- safer order execution
-- clearer code structure
-- performance improvements
-
-These improvements should **not violate the constraints defined in `docs/ROADMAP.md`.**
-
----
-
-# 10. Operational Mindset
-
-The agent must treat this project like a **production system**, even though it starts small.
-
-Key priorities:
-
+Treat this as a production system.
+Priority order:
 1. correctness
 2. safety
 3. reliability
 4. maintainability
 
-Speed of development is less important than stability.
+## 11) Final Rule
 
----
-
-# 11. Final Rule
-
-**Always gain complete understanding of this project by reading `docs/ROADMAP.md` and review the existing implementations in this repository before performing any task.**
-
-That document defines how the system must behave.
+Always ground decisions in `docs/ROADMAP.md` and current repository implementation.
+Documentation must match implemented behavior or clearly mark phased targets.

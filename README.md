@@ -1,112 +1,173 @@
 # SimpleQuantTrade
-A simple fixed-rule quantitative crypto trading system that runs as a command-line bot on NDAX, with live evaluation at the smallest practical cadence.
 
-## Current CLI (M1-M11)
+SimpleQuantTrade is a production-oriented NDAX CLI trading bot being upgraded to an ML-driven 15m architecture.
 
-- `qtbot start --budget <CAD>`
-- `qtbot pause`
-- `qtbot resume`
-- `qtbot stop`
-- `qtbot status`
-- `qtbot ndax-pairs`
-- `qtbot ndax-candles --symbol <NDAX_SYMBOL> --from-date YYYY-MM-DD --to-date YYYY-MM-DD`
-- `qtbot ndax-balances`
-- `qtbot ndax-check`
-- `qtbot staging-validate`
-- `qtbot cutover-checklist`
+Active design authority:
+- `docs/ROADMAP.md` (canonical specification)
+- `docs/PLAN.md` (implementation sequencing)
+- `docs/PRODUCTION_RUNBOOK.md` (operations)
 
-Copy `.env.example` to `.env` and fill NDAX credentials before private API checks.
+Legacy fixed-rule 1m EMA/ATR design:
+- `docs/LEGACY_FIXED_RULE_ARCHIVE.md` (archive only)
 
-## M3/M4 Runtime Behavior
+## Architecture Summary
 
-- `qtbot start --budget <CAD>` now evaluates live NDAX data each loop and generates deterministic strategy signals.
-- Decisions are appended to `runtime/logs/decisions.csv` with:
-  - `timestamp,symbol,close,ema_fast,ema_slow,atr,signal,reason`
-- Live execution (M4) is enabled with `QTBOT_ENABLE_LIVE_TRADING=true`.
-- In live mode, ENTER/EXIT decisions place NDAX market orders, ledger totals are updated in `runtime/state.sqlite`, and fills are appended to `runtime/logs/trades.csv`.
+Target v2 architecture:
+- NDAX execution venue, spot-only, CAD budget safety model.
+- 15m candle data pipeline with Parquet storage.
+- Deterministic feature pipeline (50 to 80 features).
+- LightGBM global + per-coin models.
+- Walk-forward training/evaluation and promotion gates.
+- Live inference with deterministic blend combiner.
+- Existing operational shell retained:
+- control plane (`start/pause/resume/stop/status`)
+- reconciliation-first startup
+- go-live preflight
+- risk halts and append-only logs
+- Docker + staging/cutover checks
 
-## M5 Startup Reconciliation
+## Safety Model
 
-- On startup, the runner performs reconciliation against NDAX balances before entering the trading loop.
-- NDAX is treated as the source of truth for tracked holdings and reconciliation changes are written to `state_events`.
-- In live mode, startup is blocked if reconciliation fails.
+Non-negotiable safeguards:
+- NDAX only, spot-only, no leverage/margin/borrowing.
+- Exchange balances are source of truth.
+- Market orders only.
+- Daily loss cap, slippage guard, consecutive-error kill-switch.
+- Live trading path remains explicitly gated.
+- Bundle integrity failures trigger observe-only mode.
 
-## M6 Go-Live Preflight Gate
+## Quickstart
 
-- In live mode (`QTBOT_ENABLE_LIVE_TRADING=true`), startup now runs a go-live preflight after reconciliation.
-- Required checks: credentials/auth, NDAX API reachability, CAD market coverage, candle warm-up sufficiency, state DB health, and control-file integrity.
-- Live startup is blocked when any preflight check fails, and failed checks are logged explicitly in `runtime/logs/qtbot.log` and `state_events`.
-- Candle warm-up uses coverage gating with `QTBOT_PREFLIGHT_MIN_WARMUP_COVERAGE` (default `0.8`) so isolated symbols with sparse candles do not disable all live trading.
+### 1) Environment
+- Copy `.env.example` to `.env`.
+- Fill required NDAX credentials:
+- `NDAX_API_KEY`
+- `NDAX_API_SECRET`
+- `NDAX_USER_ID`
+- Optional: `NDAX_USERNAME`
 
-## M7 Risk Hardening
+### 2) Local install
+```bash
+python3 -m pip install -e .
+```
 
-- Daily loss cap guard auto-pauses trading when daily realized PnL breaches `QTBOT_DAILY_LOSS_CAP_CAD`.
-- Slippage guard monitors realized fill-vs-signal slippage; breach of `QTBOT_MAX_SLIPPAGE_PCT` halts further orders for the cycle and pauses trading.
-- Consecutive execution/API errors are tracked in persistent state; if the count reaches `QTBOT_CONSECUTIVE_ERROR_LIMIT`, the bot auto-pauses.
+### 3) Core control-plane commands
+```bash
+qtbot start --budget 1000
+qtbot status
+qtbot pause
+qtbot resume
+qtbot stop
+```
 
-## M8 Logging + Discord Alerting
+### 4) Existing NDAX/operator commands
+```bash
+qtbot ndax-pairs
+qtbot ndax-candles --symbol SOLCAD --from-date 2026-03-01 --to-date 2026-03-05
+qtbot ndax-balances
+qtbot ndax-check
+qtbot staging-validate --offline-only
+qtbot cutover-checklist --offline-only
+```
 
-- Runtime append-only logs remain in:
-  - `runtime/logs/qtbot.log`
-  - `runtime/logs/decisions.csv`
-  - `runtime/logs/trades.csv`
-- Optional Discord alerting is enabled by setting `QTBOT_DISCORD_WEBHOOK_URL`.
-- Alert transport tuning:
-  - `QTBOT_DISCORD_TIMEOUT_SECONDS`
-  - `QTBOT_DISCORD_MAX_RETRIES`
-- Alerts are emitted for:
-  - lifecycle `PAUSE`/`STOP` transitions,
-  - repeated API/execution failures,
-  - reconciliation anomalies,
-  - risk-triggered trading halts.
+## ML Workflow (Roadmap v2 Target)
 
-## M9 Docker Production Packaging
+End-to-end v2 workflow:
+```bash
+qtbot data-backfill --from 2021-01-01 --to 2026-03-01 --timeframe 15m
+qtbot data-status
+qtbot build-snapshot --asof 2026-03-01T00:00Z
+qtbot train --snapshot <SNAPSHOT_ID> --folds 12 --universe V1
+qtbot eval --run <RUN_ID>
+qtbot promote --run <RUN_ID>
+qtbot model-status
+qtbot predict --symbol SOLCAD --at latest
+qtbot start --budget 1000
+```
 
-- Build image:
-  - `docker build -t simplequanttrade:latest .`
-- Start with compose (uses `.env`, persistent `./runtime` volume):
-  - `docker compose up -d qtbot`
-- Control lifecycle from another terminal:
-  - `docker compose exec qtbot qtbot status`
-  - `docker compose exec qtbot qtbot pause`
-  - `docker compose exec qtbot qtbot resume`
-  - `docker compose exec qtbot qtbot stop`
-- Default compose startup budget is controlled by:
-  - `QTBOT_START_BUDGET_CAD` (defaults to `1000` if unset)
+Rollback workflow:
+```bash
+qtbot pause
+qtbot set-active-bundle <BUNDLE_ID>
+qtbot resume
+```
 
-## M10 Staging Validation
+Note:
+- The roadmap command surface above is the upgrade target and is delivered by phased milestones in `docs/PLAN.md`.
 
-- Run full staging validation (live NDAX public checks + dry-run lifecycle drill + simulated reconciliation/risk faults):
-  - `PYTHONPATH=src python3 -m qtbot staging-validate --budget 1000 --cadence-seconds 3 --min-loops 2 --timeout-seconds 120`
-- Run offline-only staging validation (for CI/local no-network testing):
-  - `PYTHONPATH=src python3 -m qtbot staging-validate --offline-only --budget 1000 --cadence-seconds 1 --min-loops 1 --timeout-seconds 30`
-- Validation outputs:
-  - JSON summary to stdout
-  - persisted report at `runtime/staging_validation/logs/staging_validation_report.json`
+## Universe and Defaults (v2)
 
-## M11 Production Cutover Checklist
+Universe V1 (fixed 30 tickers):
+- `BTC, ETH, XRP, SOL, ADA, DOGE, AVAX, LINK, DOT, BCH, LTC, XLM, TON, UNI, NEAR, ATOM, HBAR, AAVE, ALGO, APT, ARB, FET, FIL, ICP, INJ, OP, SUI, TIA, RUNE, SEI`
 
-- Run full cutover readiness checks:
-  - `PYTHONPATH=src python3 -m qtbot cutover-checklist --budget 250 --staging-max-age-hours 48`
-- Run offline cutover checks (CI/local no-network):
-  - `PYTHONPATH=src python3 -m qtbot cutover-checklist --offline-only --budget 250 --staging-max-age-hours 168`
-- Optional strict alerting requirement:
-  - add `--require-discord` to require `QTBOT_DISCORD_WEBHOOK_URL`
-- Outputs:
-  - JSON summary to stdout
-  - persisted report at `runtime/production_cutover/logs/production_cutover_report.json`
-- Operator runbook:
-  - `docs/PRODUCTION_RUNBOOK.md`
+Eligibility rules:
+- Trade only tickers that have NDAX CAD pair at runtime.
+- Missing CAD pairs are skipped and logged.
+
+Policy defaults:
+- `QTBOT_TIMEFRAME=15m`
+- `QTBOT_UNIVERSE=V1`
+- `QTBOT_BTC_ETH_LOCK=true`
+- `QTBOT_FEE_PCT_PER_SIDE=0.002`
+- `QTBOT_ENTRY_THRESHOLD=0.60`
+- `QTBOT_EXIT_THRESHOLD=0.48`
+
+## Storage Layout (v2)
+
+```text
+data/raw/ndax/15m/<SYMBOL>.parquet
+data/snapshots/<SNAPSHOT_ID>/
+models/bundles/<BUNDLE_ID>/
+models/bundles/LATEST
+runtime/state.sqlite
+runtime/control.json
+runtime/logs/
+```
+
+## Docker Usage
+
+Build and start:
+```bash
+docker build -t simplequanttrade:latest .
+docker compose up -d qtbot
+```
+
+Control from another terminal:
+```bash
+docker compose exec qtbot qtbot status
+docker compose exec qtbot qtbot pause
+docker compose exec qtbot qtbot resume
+docker compose exec qtbot qtbot stop
+```
+
+Run roadmap command surface in container:
+```bash
+docker compose exec qtbot qtbot model-status
+docker compose exec qtbot qtbot data-status
+```
 
 ## Testing and CI
 
-- Local test run:
-  - `PYTHONPATH=src python3 -m unittest discover -s tests -p "test_*.py"`
-- Coverage run:
-  - `PYTHONPATH=src coverage run --source=src/qtbot -m unittest discover -s tests -p "test_*.py"`
-  - `coverage report --show-missing`
-- GitHub Actions CI runs:
-  - compile + unit test + coverage gates
-  - offline staging validation CLI check
-  - offline cutover checklist CLI check
-  - Docker image build and containerized CLI/compose validation checks
+Run tests locally:
+```bash
+PYTHONPATH=src python3 -m unittest discover -s tests -p "test_*.py"
+```
+
+Coverage:
+```bash
+PYTHONPATH=src coverage run --source=src/qtbot -m unittest discover -s tests -p "test_*.py"
+coverage report --show-missing
+```
+
+CI expectations:
+- compile + tests + coverage gate
+- offline staging and cutover command checks
+- docker image and compose validation
+
+## Operator Notes
+
+Before live launch:
+- run staging validation
+- run cutover checklist
+- verify model bundle integrity and active pointer
+- review runbook: `docs/PRODUCTION_RUNBOOK.md`
