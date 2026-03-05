@@ -66,11 +66,14 @@ jobs:
           mkdir -p runtime_ci
           docker run --rm -v "$PWD/runtime_ci:/app/runtime" simplequanttrade:ci status >/tmp/qtbot-status.json
           docker run --rm -v "$PWD/runtime_ci:/app/runtime" simplequanttrade:ci pause
-          grep -q '"command": "PAUSE"' runtime_ci/control.json
+          docker run --rm -v "$PWD/runtime_ci:/app/runtime" simplequanttrade:ci status >/tmp/qtbot-status-paused.json
+          grep -q '"control_command": "PAUSE"' /tmp/qtbot-status-paused.json
           docker run --rm -v "$PWD/runtime_ci:/app/runtime" simplequanttrade:ci resume
-          grep -q '"command": "RUN"' runtime_ci/control.json
+          docker run --rm -v "$PWD/runtime_ci:/app/runtime" simplequanttrade:ci status >/tmp/qtbot-status-running.json
+          grep -q '"control_command": "RUN"' /tmp/qtbot-status-running.json
           docker run --rm -v "$PWD/runtime_ci:/app/runtime" simplequanttrade:ci stop
-          grep -q '"command": "STOP"' runtime_ci/control.json
+          docker run --rm -v "$PWD/runtime_ci:/app/runtime" simplequanttrade:ci status >/tmp/qtbot-status-stopped.json
+          grep -q '"control_command": "STOP"' /tmp/qtbot-status-stopped.json
 
       - name: Validate docker compose file
         run: |
