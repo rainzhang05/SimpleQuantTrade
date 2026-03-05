@@ -1,0 +1,203 @@
+"""SQLite persistence for bot runtime state."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from pathlib import Path
+import sqlite3
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+class StateStore:
+    """Provides transactional reads/writes for runtime state."""
+
+    def __init__(self, db_path: Path) -> None:
+        self._db_path = db_path
+
+    def initialize(self, *, initial_budget_cad: float) -> None:
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        now = utc_now_iso()
+
+        with self._connect() as conn:
+            self._apply_schema(conn)
+            row = conn.execute(
+                """
+                SELECT initial_budget_cad
+                FROM bot_state
+                WHERE id = 1
+                """
+            ).fetchone()
+
+            if row is None:
+                conn.execute(
+                    """
+                    INSERT INTO bot_state (
+                        id,
+                        initial_budget_cad,
+                        bot_cash_cad,
+                        run_status,
+                        last_command,
+                        loop_count,
+                        last_loop_started_at_utc,
+                        last_loop_completed_at_utc,
+                        last_event,
+                        updated_at_utc
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        1,
+                        initial_budget_cad,
+                        initial_budget_cad,
+                        "INITIALIZED",
+                        "STOP",
+                        0,
+                        None,
+                        None,
+                        "state initialized",
+                        now,
+                    ),
+                )
+                self._insert_event(
+                    conn,
+                    event_type="STATE_INITIALIZED",
+                    detail=f"initial_budget_cad={initial_budget_cad:.2f}",
+                )
+                return
+
+            existing_budget = float(row["initial_budget_cad"])
+            if abs(existing_budget - initial_budget_cad) > 1e-9:
+                raise ValueError(
+                    "Existing state uses a different initial budget. "
+                    f"existing={existing_budget:.2f} requested={initial_budget_cad:.2f}"
+                )
+
+    def set_status(self, *, run_status: str, last_command: str, event_detail: str) -> None:
+        now = utc_now_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE bot_state
+                SET
+                    run_status = ?,
+                    last_command = ?,
+                    last_event = ?,
+                    updated_at_utc = ?
+                WHERE id = 1
+                """,
+                (run_status, last_command, event_detail, now),
+            )
+            self._insert_event(conn, event_type="STATUS_CHANGED", detail=event_detail)
+
+    def record_loop(
+        self,
+        *,
+        last_command: str,
+        loop_started_at_utc: str,
+        loop_completed_at_utc: str,
+        event_detail: str,
+    ) -> int:
+        now = utc_now_iso()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE bot_state
+                SET
+                    run_status = ?,
+                    last_command = ?,
+                    loop_count = loop_count + 1,
+                    last_loop_started_at_utc = ?,
+                    last_loop_completed_at_utc = ?,
+                    last_event = ?,
+                    updated_at_utc = ?
+                WHERE id = 1
+                """,
+                (
+                    "RUNNING",
+                    last_command,
+                    loop_started_at_utc,
+                    loop_completed_at_utc,
+                    event_detail,
+                    now,
+                ),
+            )
+            row = conn.execute(
+                """
+                SELECT loop_count
+                FROM bot_state
+                WHERE id = 1
+                """
+            ).fetchone()
+            self._insert_event(conn, event_type="LOOP_RECORDED", detail=event_detail)
+            return int(row["loop_count"])
+
+    def get_snapshot(self) -> dict[str, object] | None:
+        if not self._db_path.exists():
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    initial_budget_cad,
+                    bot_cash_cad,
+                    run_status,
+                    last_command,
+                    loop_count,
+                    last_loop_started_at_utc,
+                    last_loop_completed_at_utc,
+                    last_event,
+                    updated_at_utc
+                FROM bot_state
+                WHERE id = 1
+                """
+            ).fetchone()
+            if row is None:
+                return None
+            return dict(row)
+
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self._db_path, timeout=30)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=FULL")
+        return conn
+
+    def _apply_schema(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS bot_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                initial_budget_cad REAL NOT NULL,
+                bot_cash_cad REAL NOT NULL,
+                run_status TEXT NOT NULL,
+                last_command TEXT NOT NULL,
+                loop_count INTEGER NOT NULL DEFAULT 0,
+                last_loop_started_at_utc TEXT,
+                last_loop_completed_at_utc TEXT,
+                last_event TEXT NOT NULL,
+                updated_at_utc TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS state_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_time_utc TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                detail TEXT NOT NULL
+            )
+            """
+        )
+
+    def _insert_event(self, conn: sqlite3.Connection, *, event_type: str, detail: str) -> None:
+        conn.execute(
+            """
+            INSERT INTO state_events (event_time_utc, event_type, detail)
+            VALUES (?, ?, ?)
+            """,
+            (utc_now_iso(), event_type, detail),
+        )

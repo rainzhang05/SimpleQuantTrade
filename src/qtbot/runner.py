@@ -1,0 +1,182 @@
+"""Long-running bot process for M1 control and persistence."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timezone
+import errno
+import os
+from pathlib import Path
+import signal
+import time
+
+from qtbot.config import RuntimeConfig
+from qtbot.control import Command, read_control, write_control
+from qtbot.logging_setup import configure_logging
+from qtbot.state import StateStore
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+@dataclass
+class RunResult:
+    loop_count: int
+
+
+class RunnerAlreadyRunningError(RuntimeError):
+    """Raised when a second runner instance is started."""
+
+
+class RunnerPidLock:
+    """Simple PID lock file to avoid duplicate runners."""
+
+    def __init__(self, pid_file: Path) -> None:
+        self._pid_file = pid_file
+        self._pid = os.getpid()
+
+    def __enter__(self) -> "RunnerPidLock":
+        self._pid_file.parent.mkdir(parents=True, exist_ok=True)
+        existing_pid = read_runner_pid(self._pid_file)
+        if existing_pid is not None and is_pid_alive(existing_pid):
+            raise RunnerAlreadyRunningError(
+                f"qtbot runner already active with pid={existing_pid}."
+            )
+        self._pid_file.write_text(f"{self._pid}\n", encoding="utf-8")
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        existing_pid = read_runner_pid(self._pid_file)
+        if existing_pid == self._pid:
+            self._pid_file.unlink(missing_ok=True)
+
+
+def read_runner_pid(pid_file: Path) -> int | None:
+    if not pid_file.exists():
+        return None
+    try:
+        raw_value = pid_file.read_text(encoding="utf-8").strip()
+        if not raw_value:
+            return None
+        return int(raw_value)
+    except (OSError, ValueError):
+        return None
+
+
+def is_pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError as exc:
+        if exc.errno == errno.ESRCH:
+            return False
+        return exc.errno == errno.EPERM
+    return True
+
+
+class BotRunner:
+    """Implements M1 lifecycle loop with control polling and persistence."""
+
+    def __init__(self, *, config: RuntimeConfig, budget_cad: float) -> None:
+        self._config = config
+        self._budget_cad = budget_cad
+        self._shutdown_requested = False
+
+    def run(self) -> RunResult:
+        self._config.runtime_dir.mkdir(parents=True, exist_ok=True)
+        self._config.log_file.parent.mkdir(parents=True, exist_ok=True)
+
+        with RunnerPidLock(self._config.pid_file):
+            logger = configure_logging(self._config.log_file)
+            state_store = StateStore(self._config.state_db)
+            state_store.initialize(initial_budget_cad=self._budget_cad)
+
+            write_control(
+                self._config.control_file,
+                Command.RUN,
+                updated_by="cli:start",
+                reason="start command",
+            )
+            state_store.set_status(
+                run_status="RUNNING",
+                last_command=Command.RUN.value,
+                event_detail="runner startup",
+            )
+
+            self._install_signal_handlers(logger=logger)
+            logger.info(
+                "qtbot runner started with cadence=%ss budget_cad=%.2f",
+                self._config.cadence_seconds,
+                self._budget_cad,
+            )
+
+            paused = False
+            next_loop_at = time.monotonic()
+            loop_count = 0
+
+            while True:
+                command = read_control(self._config.control_file).command
+                if self._shutdown_requested:
+                    command = Command.STOP
+
+                if command == Command.STOP:
+                    state_store.set_status(
+                        run_status="STOPPED",
+                        last_command=Command.STOP.value,
+                        event_detail="stop transition",
+                    )
+                    logger.info("Stop requested. Exiting gracefully.")
+                    break
+
+                if command == Command.PAUSE:
+                    if not paused:
+                        paused = True
+                        state_store.set_status(
+                            run_status="PAUSED",
+                            last_command=Command.PAUSE.value,
+                            event_detail="pause transition",
+                        )
+                        logger.info("Pause requested. Trading loop suspended.")
+                    time.sleep(1.0)
+                    continue
+
+                if paused:
+                    paused = False
+                    state_store.set_status(
+                        run_status="RUNNING",
+                        last_command=Command.RUN.value,
+                        event_detail="resume transition",
+                    )
+                    logger.info("Resume requested. Trading loop resumed.")
+                    next_loop_at = time.monotonic()
+
+                now = time.monotonic()
+                if now < next_loop_at:
+                    time.sleep(min(1.0, next_loop_at - now))
+                    continue
+
+                loop_started_at = utc_now_iso()
+                # M1 scope: no strategy/execution yet, only heartbeat and persistence.
+                loop_completed_at = utc_now_iso()
+                loop_count = state_store.record_loop(
+                    last_command=Command.RUN.value,
+                    loop_started_at_utc=loop_started_at,
+                    loop_completed_at_utc=loop_completed_at,
+                    event_detail="loop heartbeat persisted",
+                )
+                logger.info("Loop heartbeat completed. loop_count=%s", loop_count)
+
+                now_after = time.monotonic()
+                next_loop_at = max(next_loop_at + self._config.cadence_seconds, now_after)
+
+            return RunResult(loop_count=loop_count)
+
+    def _install_signal_handlers(self, *, logger) -> None:
+        def _handler(signum, _frame) -> None:
+            self._shutdown_requested = True
+            logger.info("Signal received signum=%s. STOP requested.", signum)
+
+        signal.signal(signal.SIGINT, _handler)
+        signal.signal(signal.SIGTERM, _handler)

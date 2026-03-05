@@ -84,6 +84,26 @@ Exit criteria:
 - Control commands work cross-terminal without force-kill.
 - Pause/stop are graceful and state is persisted.
 
+M1 implementation status:
+- [x] Python package + CLI entrypoint created (`qtbot`).
+- [x] Control plane implemented using atomic `runtime/control.json` updates.
+- [x] Persistent state store implemented in `runtime/state.sqlite`.
+- [x] Runner loop implemented with 60-second heartbeat persistence.
+- [x] Cross-terminal lifecycle control validated (`start`, `pause`, `resume`, `stop`, `status`).
+
+M1 validation evidence:
+- Compile check: `python3 -m compileall src` passed.
+- Live run command: `PYTHONPATH=src python3 -m qtbot start --budget 1000`.
+- Control commands during run:
+  - `PYTHONPATH=src python3 -m qtbot status`
+  - `PYTHONPATH=src python3 -m qtbot pause`
+  - `PYTHONPATH=src python3 -m qtbot resume`
+  - `PYTHONPATH=src python3 -m qtbot stop`
+- Persistence checks:
+  - `runtime/control.json` updated atomically with latest command.
+  - `runtime/state.sqlite` reflects final `STOPPED` status and loop count.
+  - `runtime/logs/qtbot.log` contains heartbeat + lifecycle transitions.
+
 ### M2: NDAX API Integration
 - Implement NDAX authentication and robust client wrapper.
 - Pull balances and instrument metadata.
