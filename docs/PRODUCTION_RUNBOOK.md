@@ -101,7 +101,7 @@ Rollback rules:
 - Never delete old promoted bundles during rollback.
 - Pointer update must be atomic and logged.
 
-## 6) Emergency Stop and Containment
+## Rollback Procedure
 
 Immediate containment:
 ```bash
@@ -124,7 +124,7 @@ Preserve artifacts for investigation:
 - `runtime/logs/decisions.csv`
 - `runtime/logs/trades.csv`
 
-## 7) Incident Playbooks
+## Incident Response
 
 ### 7.1 Model bundle integrity failure
 Symptoms:
