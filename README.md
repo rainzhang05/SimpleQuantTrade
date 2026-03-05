@@ -1,7 +1,7 @@
 # SimpleQuantTrade
 A simple fixed-rule quantitative crypto trading system that runs as a command-line bot on NDAX, with live evaluation at the smallest practical cadence.
 
-## Current CLI (M1-M10)
+## Current CLI (M1-M11)
 
 - `qtbot start --budget <CAD>`
 - `qtbot pause`
@@ -13,6 +13,7 @@ A simple fixed-rule quantitative crypto trading system that runs as a command-li
 - `qtbot ndax-balances`
 - `qtbot ndax-check`
 - `qtbot staging-validate`
+- `qtbot cutover-checklist`
 
 Copy `.env.example` to `.env` and fill NDAX credentials before private API checks.
 
@@ -83,6 +84,20 @@ Copy `.env.example` to `.env` and fill NDAX credentials before private API check
   - JSON summary to stdout
   - persisted report at `runtime/staging_validation/logs/staging_validation_report.json`
 
+## M11 Production Cutover Checklist
+
+- Run full cutover readiness checks:
+  - `PYTHONPATH=src python3 -m qtbot cutover-checklist --budget 250 --staging-max-age-hours 48`
+- Run offline cutover checks (CI/local no-network):
+  - `PYTHONPATH=src python3 -m qtbot cutover-checklist --offline-only --budget 250 --staging-max-age-hours 168`
+- Optional strict alerting requirement:
+  - add `--require-discord` to require `QTBOT_DISCORD_WEBHOOK_URL`
+- Outputs:
+  - JSON summary to stdout
+  - persisted report at `runtime/production_cutover/logs/production_cutover_report.json`
+- Operator runbook:
+  - `PRODUCTION_RUNBOOK.md`
+
 ## Testing and CI
 
 - Local test run:
@@ -93,4 +108,5 @@ Copy `.env.example` to `.env` and fill NDAX credentials before private API check
 - GitHub Actions CI runs:
   - compile + unit test + coverage gates
   - offline staging validation CLI check
+  - offline cutover checklist CLI check
   - Docker image build and containerized CLI/compose validation checks

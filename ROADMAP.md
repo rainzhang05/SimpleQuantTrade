@@ -399,6 +399,17 @@ Acceptance:
 - lifecycle and failure-path drills are reproducible from CLI
 - reconciliation and risk simulated-fault checks pass before production cutover
 
+### M11: Production Cutover Checklist
+- add `qtbot cutover-checklist` command to execute production-readiness gates
+- require recent successful staging report before launch approval
+- validate local control/state health and runbook presence (`PRODUCTION_RUNBOOK.md`)
+- in live mode, validate NDAX private connectivity and go-live preflight pass
+- emit machine-readable cutover report with launch/rollback/manual-verification checklist
+Acceptance:
+- `cutover-checklist` reports green readiness before first production launch
+- runbook provides explicit rollback and incident response instructions
+- cutover report is persisted and auditable for operations review
+
 ---
 
 ## 11) Defaults Summary (Chosen to Match “Fast Live Evaluation” + “Hours to Days Holding”)

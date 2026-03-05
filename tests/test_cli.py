@@ -48,6 +48,25 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.timeout_seconds, 90)
         self.assertTrue(args.offline_only)
 
+    def test_parser_accepts_cutover_checklist_flags(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "cutover-checklist",
+                "--budget",
+                "300",
+                "--staging-max-age-hours",
+                "72",
+                "--offline-only",
+                "--require-discord",
+            ]
+        )
+        self.assertEqual(args.command, "cutover-checklist")
+        self.assertEqual(args.budget, 300.0)
+        self.assertEqual(args.staging_max_age_hours, 72)
+        self.assertTrue(args.offline_only)
+        self.assertTrue(args.require_discord)
+
 
 if __name__ == "__main__":
     unittest.main()

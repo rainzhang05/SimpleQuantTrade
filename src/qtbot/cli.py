@@ -9,6 +9,7 @@ import sys
 
 from qtbot.config import RuntimeConfig, load_runtime_config
 from qtbot.control import Command, read_control, write_control
+from qtbot.cutover import ProductionCutoverChecklist
 from qtbot.ndax_client import (
     NdaxAuthenticationError,
     NdaxClient,
@@ -122,6 +123,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip live NDAX drills and run only offline/simulated staging checks.",
     )
 
+    cutover_parser = subparsers.add_parser(
+        "cutover-checklist",
+        help="Run M11 production cutover checklist and emit JSON report.",
+    )
+    cutover_parser.add_argument(
+        "--budget",
+        type=positive_float,
+        default=250.0,
+        help="Constrained launch budget for preflight/cutover readiness checks.",
+    )
+    cutover_parser.add_argument(
+        "--staging-max-age-hours",
+        type=int,
+        default=48,
+        help="Maximum allowed age of staging validation report.",
+    )
+    cutover_parser.add_argument(
+        "--offline-only",
+        action="store_true",
+        help="Skip live NDAX private/preflight gates and run offline cutover checks.",
+    )
+    cutover_parser.add_argument(
+        "--require-discord",
+        action="store_true",
+        help="Require QTBOT_DISCORD_WEBHOOK_URL for cutover readiness pass.",
+    )
+
     return parser
 
 
@@ -176,6 +204,14 @@ def main(argv: list[str] | None = None) -> int:
             min_loops=args.min_loops,
             timeout_seconds=args.timeout_seconds,
             offline_only=args.offline_only,
+        )
+    if command == "cutover-checklist":
+        return _handle_cutover_checklist(
+            config=config,
+            start_budget_cad=args.budget,
+            staging_max_age_hours=args.staging_max_age_hours,
+            offline_only=args.offline_only,
+            require_discord=args.require_discord,
         )
 
     print(f"Unknown command: {command}", file=sys.stderr)
@@ -448,6 +484,33 @@ def _handle_staging_validate(
         )
     except Exception as exc:
         print(f"Staging validation failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(json.dumps(report.to_payload(), indent=2, sort_keys=True))
+    return 0 if report.passed else 1
+
+
+def _handle_cutover_checklist(
+    *,
+    config: RuntimeConfig,
+    start_budget_cad: float,
+    staging_max_age_hours: int,
+    offline_only: bool,
+    require_discord: bool,
+) -> int:
+    if staging_max_age_hours <= 0:
+        print("--staging-max-age-hours must be > 0", file=sys.stderr)
+        return 2
+
+    try:
+        report = ProductionCutoverChecklist(config=config).run(
+            start_budget_cad=start_budget_cad,
+            staging_max_age_hours=staging_max_age_hours,
+            offline_only=offline_only,
+            require_discord=require_discord,
+        )
+    except Exception as exc:
+        print(f"Cutover checklist failed: {exc}", file=sys.stderr)
         return 1
 
     print(json.dumps(report.to_payload(), indent=2, sort_keys=True))

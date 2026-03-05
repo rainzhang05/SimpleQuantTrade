@@ -51,6 +51,8 @@ Target module boundaries:
   - `qtbot.log`, `trades.csv`, `decisions.csv` append-only outputs.
 - `alerts`:
   - Discord webhook notifications for critical events.
+- `cutover`:
+  - production readiness gates, launch/rollback checklist report generation.
 
 ## 3) Implementation Phases (M0-M11)
 
@@ -418,6 +420,40 @@ M10 validation evidence:
 
 Exit criteria:
 - Production launch checklist fully green and operator-ready.
+
+M11 implementation status:
+- [x] Added dedicated production cutover module: `src/qtbot/cutover.py`.
+- [x] Added CLI command: `qtbot cutover-checklist` with controls:
+  - `--budget`
+  - `--staging-max-age-hours`
+  - `--offline-only`
+  - `--require-discord`
+- [x] Implemented automated cutover gates:
+  - recent successful staging report required,
+  - production runbook presence/section checks,
+  - local state/control-plane health checks,
+  - optional Discord requirement enforcement,
+  - live-mode NDAX private connectivity check,
+  - live-mode go-live preflight pass on isolated cutover runtime.
+- [x] Added persisted cutover report output:
+  - stdout JSON summary
+  - `runtime/production_cutover/logs/production_cutover_report.json`.
+- [x] Added production operations artifact:
+  - new `PRODUCTION_RUNBOOK.md` with launch, first-trade verification, rollback, and incident response playbooks.
+- [x] Added/updated M11 tests:
+  - new `tests/test_cutover.py`
+  - updates in `tests/test_cli.py` and `tests/test_cli_handlers.py`.
+- [x] Added phase-appropriate CI gate:
+  - offline cutover checklist command in `.github/workflows/ci.yml`.
+
+M11 validation evidence:
+- Compile check: `python3 -m compileall src` passed.
+- Unit/integration suite: `PYTHONPATH=src python3 -m unittest discover -s tests -p "test_*.py"` passed.
+- Coverage gate: `PYTHONPATH=src coverage run --source=src/qtbot -m unittest discover -s tests -p "test_*.py"` and `coverage report --show-missing --fail-under=85` passed.
+- Full cutover run (live checks enabled) passed:
+  - `PYTHONPATH=src python3 -m qtbot cutover-checklist --budget 250 --staging-max-age-hours 48`
+- Offline cutover run (CI parity) passed:
+  - `PYTHONPATH=src python3 -m qtbot cutover-checklist --offline-only --budget 250 --staging-max-age-hours 168`.
 
 ## 4) CLI Lifecycle and Control-Plane Behavior
 

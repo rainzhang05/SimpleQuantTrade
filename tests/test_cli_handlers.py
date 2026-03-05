@@ -9,6 +9,7 @@ from unittest import mock
 
 from qtbot import cli
 from qtbot.control import Command
+from qtbot.cutover import CutoverCheckResult, ProductionCutoverReport
 from qtbot.ndax_client import NdaxAuthenticationError, NdaxError
 from qtbot.staging import StagingValidationReport, StagingValidationStep
 from qtbot.state import StateStore
@@ -202,6 +203,38 @@ class CliHandlerTests(unittest.TestCase):
                     min_loops=2,
                     timeout_seconds=60,
                     offline_only=True,
+                )
+            self.assertEqual(code, 0)
+            payload = json.loads(out)
+            self.assertTrue(payload["passed"])
+
+    def test_handle_cutover_checklist(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = make_runtime_config(Path(td))
+            report = ProductionCutoverReport(
+                started_at_utc="2026-03-05T00:00:00+00:00",
+                completed_at_utc="2026-03-05T00:01:00+00:00",
+                runtime_dir=cfg.runtime_dir / "production_cutover",
+                report_file=cfg.runtime_dir / "production_cutover" / "logs" / "production_cutover_report.json",
+                checks=[
+                    CutoverCheckResult(name="staging_validation_report", passed=True, detail="ok"),
+                ],
+                passed=True,
+                message="production_cutover_ready checks=1",
+                start_budget_cad=250.0,
+                launch_commands=["qtbot start --budget 250"],
+                manual_verification_checklist=["verify trade"],
+                rollback_commands=["qtbot stop"],
+            )
+            with mock.patch("qtbot.cli.ProductionCutoverChecklist") as cutover_cls:
+                cutover_cls.return_value.run.return_value = report
+                code, out, _ = _capture_output(
+                    cli._handle_cutover_checklist,
+                    config=cfg,
+                    start_budget_cad=250.0,
+                    staging_max_age_hours=48,
+                    offline_only=True,
+                    require_discord=False,
                 )
             self.assertEqual(code, 0)
             payload = json.loads(out)

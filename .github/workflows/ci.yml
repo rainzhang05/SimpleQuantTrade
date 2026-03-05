@@ -44,6 +44,10 @@ jobs:
         run: |
           python -m qtbot staging-validate --offline-only --budget 1000 --cadence-seconds 1 --min-loops 1 --timeout-seconds 30
 
+      - name: Run offline production cutover checklist
+        run: |
+          python -m qtbot cutover-checklist --offline-only --budget 250 --staging-max-age-hours 168
+
       - name: Upload coverage xml
         uses: actions/upload-artifact@v4
         with:
