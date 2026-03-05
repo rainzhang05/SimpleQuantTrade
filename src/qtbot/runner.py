@@ -16,6 +16,7 @@ from qtbot.decision_log import DecisionCsvLogger
 from qtbot.execution import LiveExecutionEngine
 from qtbot.logging_setup import configure_logging
 from qtbot.ndax_client import NdaxAuthenticationError, NdaxClient, NdaxError
+from qtbot.preflight import GoLivePreflight
 from qtbot.reconciliation import StartupReconciler
 from qtbot.state import StateStore
 from qtbot.strategy.engine import StrategyEngine
@@ -157,6 +158,34 @@ class BotRunner:
                     detail=event_detail,
                 )
                 startup_event = f"startup_reconciliation_skipped: {exc}"
+
+            if self._config.enable_live_trading:
+                state_store.set_status(
+                    run_status="PREFLIGHT",
+                    last_command=Command.STOP.value,
+                    event_detail="go-live preflight started",
+                )
+                preflight = GoLivePreflight(
+                    config=self._config,
+                    ndax_client=ndax_client,
+                    state_store=state_store,
+                    logger=logger,
+                )
+                preflight_summary = preflight.run()
+                if not preflight_summary.passed:
+                    event_detail = f"go_live_preflight_failed: {preflight_summary.message}"
+                    state_store.set_status(
+                        run_status="ERROR",
+                        last_command=Command.STOP.value,
+                        event_detail=event_detail,
+                    )
+                    logger.error(
+                        "Go-live preflight failed in live mode. Blocking bot start: %s",
+                        preflight_summary.message,
+                    )
+                    raise NdaxError(preflight_summary.message)
+                logger.info("Go-live preflight completed. %s", preflight_summary.message)
+                startup_event = f"{startup_event}; {preflight_summary.message}"
 
             write_control(
                 self._config.control_file,

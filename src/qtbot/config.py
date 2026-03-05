@@ -41,6 +41,7 @@ class RuntimeConfig:
     min_order_notional_cad: float
     order_status_poll_seconds: float
     order_status_max_attempts: int
+    preflight_min_warmup_coverage: float
 
 
 def load_runtime_config() -> RuntimeConfig:
@@ -105,6 +106,10 @@ def load_runtime_config() -> RuntimeConfig:
     if order_status_max_attempts <= 0:
         raise ValueError("QTBOT_ORDER_STATUS_MAX_ATTEMPTS must be > 0.")
 
+    preflight_min_warmup_coverage = float(os.getenv("QTBOT_PREFLIGHT_MIN_WARMUP_COVERAGE", "0.8"))
+    if not (0 < preflight_min_warmup_coverage <= 1):
+        raise ValueError("QTBOT_PREFLIGHT_MIN_WARMUP_COVERAGE must be in (0, 1].")
+
     runtime_dir = _resolve_runtime_dir(os.getenv("QTBOT_RUNTIME_DIR", "runtime"))
     return RuntimeConfig(
         cadence_seconds=cadence_seconds,
@@ -130,6 +135,7 @@ def load_runtime_config() -> RuntimeConfig:
         min_order_notional_cad=min_order_notional_cad,
         order_status_poll_seconds=order_status_poll_seconds,
         order_status_max_attempts=order_status_max_attempts,
+        preflight_min_warmup_coverage=preflight_min_warmup_coverage,
     )
 
 

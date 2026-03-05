@@ -1,7 +1,7 @@
 # SimpleQuantTrade
 A simple fixed-rule quantitative crypto trading system that runs as a command-line bot on NDAX, with live evaluation at the smallest practical cadence.
 
-## Current CLI (M1 + M2)
+## Current CLI (M1-M6)
 
 - `qtbot start --budget <CAD>`
 - `qtbot pause`
@@ -28,6 +28,13 @@ Copy `.env.example` to `.env` and fill NDAX credentials before private API check
 - On startup, the runner performs reconciliation against NDAX balances before entering the trading loop.
 - NDAX is treated as the source of truth for tracked holdings and reconciliation changes are written to `state_events`.
 - In live mode, startup is blocked if reconciliation fails.
+
+## M6 Go-Live Preflight Gate
+
+- In live mode (`QTBOT_ENABLE_LIVE_TRADING=true`), startup now runs a go-live preflight after reconciliation.
+- Required checks: credentials/auth, NDAX API reachability, CAD market coverage, candle warm-up sufficiency, state DB health, and control-file integrity.
+- Live startup is blocked when any preflight check fails, and failed checks are logged explicitly in `runtime/logs/qtbot.log` and `state_events`.
+- Candle warm-up uses coverage gating with `QTBOT_PREFLIGHT_MIN_WARMUP_COVERAGE` (default `0.8`) so isolated symbols with sparse candles do not disable all live trading.
 
 ## Testing and CI
 

@@ -10,6 +10,7 @@ from unittest import mock
 
 from qtbot.control import Command, ControlState
 from qtbot.ndax_client import NdaxError
+from qtbot.preflight import PreflightCheckResult, PreflightSummary
 from qtbot.runner import BotRunner
 from qtbot.strategy.engine import StrategySummary
 from tests._helpers import make_runtime_config
@@ -118,6 +119,48 @@ class RunnerLoopTests(unittest.TestCase):
                 "qtbot.runner.signal.signal"
             ):
                 reconciler_cls.return_value.reconcile.side_effect = NdaxError("reconcile failed")
+                with self.assertRaises(NdaxError):
+                    BotRunner(config=cfg, budget_cad=1000.0).run()
+
+    def test_runner_blocks_start_when_live_preflight_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = make_runtime_config(Path(td), enable_live_trading=True)
+            logger = logging.getLogger("runner-test-preflight-block")
+            if not logger.handlers:
+                logger.addHandler(logging.NullHandler())
+
+            failed_summary = PreflightSummary(
+                checks=[
+                    PreflightCheckResult(
+                        name="credentials_auth",
+                        passed=False,
+                        detail="missing credentials",
+                    )
+                ],
+                message="go_live_preflight_failed failed_checks=credentials_auth",
+            )
+
+            with mock.patch("qtbot.runner.configure_logging", return_value=logger), mock.patch(
+                "qtbot.runner.StateStore", _FakeStateStore
+            ), mock.patch("qtbot.runner.NdaxClient", return_value=mock.Mock()), mock.patch(
+                "qtbot.runner.DecisionCsvLogger", return_value=mock.Mock()
+            ), mock.patch(
+                "qtbot.runner.TradeCsvLogger", return_value=mock.Mock()
+            ), mock.patch(
+                "qtbot.runner.StrategyEngine", return_value=mock.Mock()
+            ), mock.patch(
+                "qtbot.runner.LiveExecutionEngine", return_value=mock.Mock()
+            ), mock.patch(
+                "qtbot.runner.StartupReconciler"
+            ) as reconciler_cls, mock.patch(
+                "qtbot.runner.GoLivePreflight"
+            ) as preflight_cls, mock.patch(
+                "qtbot.runner.signal.signal"
+            ):
+                reconciler_cls.return_value.reconcile.return_value = mock.Mock(
+                    message="reconciliation_complete"
+                )
+                preflight_cls.return_value.run.return_value = failed_summary
                 with self.assertRaises(NdaxError):
                     BotRunner(config=cfg, budget_cad=1000.0).run()
 

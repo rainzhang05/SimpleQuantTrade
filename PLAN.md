@@ -41,6 +41,8 @@ Target module boundaries:
   - cash/position/PnL/fee accounting and invariants.
 - `state`:
   - SQLite persistence and recovery/reconciliation workflow.
+- `preflight`:
+  - go-live safety validation gate prior to live order placement.
 - `risk`:
   - live risk gates (loss cap, slippage, kill-switch thresholds).
 - `logging`:
@@ -219,6 +221,33 @@ M5 validation evidence:
 Exit criteria:
 - Failed preflight blocks live trading and reports exact failed checks.
 - Successful preflight enables live execution path safely.
+
+M6 implementation status:
+- [x] Added `GoLivePreflight` module with structured check results and summary output.
+- [x] Implemented all required checks:
+  - `credentials_auth`
+  - `ndax_api_reachability`
+  - `cad_market_coverage`
+  - `candle_warmup_sufficiency`
+  - `state_db_health`
+  - `control_file_integrity`
+- [x] Added configurable warm-up coverage threshold (`QTBOT_PREFLIGHT_MIN_WARMUP_COVERAGE`, default `0.8`) to avoid blocking live mode on isolated sparse-candle symbols.
+- [x] Integrated live startup gate in `runner` after reconciliation and before entering RUN mode.
+- [x] Added explicit failure handling:
+  - runner status transitions to `ERROR`,
+  - startup is blocked in live mode,
+  - failed checks are logged with exact details.
+- [x] Added preflight event persistence (`GO_LIVE_PREFLIGHT_PASSED` / `GO_LIVE_PREFLIGHT_FAILED`).
+
+M6 validation evidence:
+- Compile check: `python3 -m compileall src` passed after preflight integration.
+- Unit/integration suite: `PYTHONPATH=src python3 -m unittest discover -s tests -p "test_*.py"` passed (`75` tests).
+- Coverage gate: `PYTHONPATH=src coverage run --source=src/qtbot -m unittest discover -s tests -p "test_*.py"` and `coverage report --show-missing --fail-under=85` passed at `86%`.
+- Live-mode startup smoke run (order-notional guard enabled): `QTBOT_RUNTIME_DIR=runtime_m6_check QTBOT_CADENCE_SECONDS=2 QTBOT_ENABLE_LIVE_TRADING=true QTBOT_MIN_ORDER_NOTIONAL_CAD=1000000000 QTBOT_PREFLIGHT_MIN_WARMUP_COVERAGE=0.8 PYTHONPATH=src python3 -m qtbot start --budget 1000` completed preflight and entered loop.
+- New M6 tests added:
+  - `tests/test_preflight.py` covers pass/fail scenarios for all go-live checks.
+  - `tests/test_runner_loop.py` includes live startup blocking when preflight fails.
+- CI gate tightened: coverage fail-under raised from `84` to `85` in `.github/workflows/ci.yml`.
 
 ### M7: Risk Hardening
 - Add production safeguards:
@@ -402,6 +431,7 @@ Defaults:
 - Max new entries per cycle: 3.
 - Fee model: 0.4% per side.
 - State store: `runtime/state.sqlite`.
+- Go-live warmup coverage threshold: `0.8`.
 
 Documentation policy:
 - NDAX naming remains canonical in all docs.

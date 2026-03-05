@@ -213,6 +213,14 @@ Rule:
 - API retry with exponential backoff on transient failures.
 - Idempotency:
   - If the bot crashes after placing an order, on restart it must reconcile holdings before trading again.
+- Live-mode preflight gate before any order placement:
+  - validate credentials/authentication,
+  - validate NDAX API reachability,
+  - validate tradable CAD market coverage,
+  - validate candle warm-up sufficiency for strategy indicators (coverage threshold, default 0.8),
+  - validate state DB read/write health,
+  - validate control-file integrity.
+  - If any preflight check fails, the bot must block live startup and surface exact failed checks.
 
 ---
 
@@ -341,6 +349,14 @@ Acceptance:
 Acceptance:
 - bot can survive transient API failures and can resume after pause/stop without losing state
 
+### M6: Go-Live Validation Gate
+- Add deterministic go-live preflight checks before entering live loop.
+- Block live startup if any safety-critical check fails.
+- Persist and log preflight outcomes for operations review.
+Acceptance:
+- failed preflight blocks live order path with explicit failed checks
+- successful preflight is required before live execution can run
+
 ---
 
 ## 11) Defaults Summary (Chosen to Match “Fast Live Evaluation” + “Hours to Days Holding”)
@@ -354,6 +370,7 @@ Acceptance:
 - Cooldown after exit: **30 minutes**
 - Max new entries per cycle: **3** (operational burst control; not a portfolio limit)
 - Fee: **0.4% per side**
+- Go-live preflight warmup coverage threshold: **0.8**
 
 All defaults should be placed in a single config module/file.
 
