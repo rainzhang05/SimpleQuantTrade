@@ -1,0 +1,61 @@
+{
+  "checks": [
+    {
+      "detail": "staging report fresh age_hours=0.00 required_steps=5",
+      "name": "staging_validation_report",
+      "passed": true
+    },
+    {
+      "detail": "runbook present at /Users/rainzhang/SimpleQuantTrade/docs/PRODUCTION_RUNBOOK.md",
+      "name": "production_runbook_presence",
+      "passed": true
+    },
+    {
+      "detail": "control/state health passed run_status=INITIALIZED loop_count=0",
+      "name": "local_state_control_health",
+      "passed": true
+    },
+    {
+      "detail": "discord webhook configured",
+      "name": "discord_alerting_configuration",
+      "passed": true
+    },
+    {
+      "detail": "NDAX credentials loaded from environment",
+      "name": "credentials_presence",
+      "passed": true
+    },
+    {
+      "detail": "private NDAX check passed account_id=739721 balance_count=86 cad_available=5",
+      "name": "ndax_private_connectivity",
+      "passed": true
+    },
+    {
+      "detail": "go_live_preflight_passed checks=6",
+      "name": "go_live_preflight_check",
+      "passed": true
+    }
+  ],
+  "completed_at_utc": "2026-03-05T10:24:35+00:00",
+  "launch_commands": [
+    "PYTHONPATH=src python3 -m qtbot start --budget 250",
+    "docker compose up -d qtbot --scale qtbot=1 (set QTBOT_START_BUDGET_CAD=250 in environment)"
+  ],
+  "manual_verification_checklist": [
+    "Confirm first live ENTER/EXIT fills appear in runtime/logs/trades.csv with expected fees.",
+    "Confirm runtime/state.sqlite totals (bot_cash_cad, realized_pnl_cad, fees_paid_cad) are consistent with fills.",
+    "Confirm Discord receives lifecycle and risk/reconciliation alerts (or manual operator alert path is active).",
+    "Confirm initial live cycles match expected strategy decisions and risk constraints."
+  ],
+  "message": "production_cutover_ready checks=7",
+  "passed": true,
+  "report_file": "/Users/rainzhang/SimpleQuantTrade/runtime_prod/production_cutover/logs/production_cutover_report.json",
+  "rollback_commands": [
+    "PYTHONPATH=src python3 -m qtbot stop",
+    "docker compose exec qtbot qtbot stop",
+    "Verify status transitions to STOPPED before restart attempts."
+  ],
+  "runtime_dir": "/Users/rainzhang/SimpleQuantTrade/runtime_prod/production_cutover",
+  "start_budget_cad": 250.0,
+  "started_at_utc": "2026-03-05T10:24:25+00:00"
+}

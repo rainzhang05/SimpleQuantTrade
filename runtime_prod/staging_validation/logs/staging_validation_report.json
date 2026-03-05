@@ -1,0 +1,35 @@
+{
+  "completed_at_utc": "2026-03-05T10:24:20+00:00",
+  "message": "staging_validation_passed steps=5",
+  "passed": true,
+  "report_file": "/Users/rainzhang/SimpleQuantTrade/runtime_prod/staging_validation/logs/staging_validation_report.json",
+  "runtime_dir": "/Users/rainzhang/SimpleQuantTrade/runtime_prod/staging_validation",
+  "started_at_utc": "2026-03-05T10:23:49+00:00",
+  "steps": [
+    {
+      "detail": "ndax-pairs succeeded instrument_count=87 tradable_count=18",
+      "name": "public_ndax_health_check",
+      "passed": true
+    },
+    {
+      "detail": "dry-run lifecycle drill passed loop_count=3 decisions_rows=54",
+      "name": "dry_run_lifecycle_drill",
+      "passed": true
+    },
+    {
+      "detail": "ndax-check failed as expected rc=1",
+      "name": "cli_failure_scenario_invalid_symbol",
+      "passed": true
+    },
+    {
+      "detail": "reconciliation simulation passed changed_symbols=2 capped_bot_cash=True",
+      "name": "reconciliation_fault_simulation",
+      "passed": true
+    },
+    {
+      "detail": "risk simulation passed loss_triggered=True errors_triggered=True slippage_triggered=True",
+      "name": "risk_fault_simulation",
+      "passed": true
+    }
+  ]
+}
