@@ -5,16 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-TOP_20_MARKET_COINS: tuple[str, ...] = (
+UNIVERSE_V1_COINS: tuple[str, ...] = (
     "BTC",
     "ETH",
     "XRP",
     "SOL",
     "ADA",
     "DOGE",
-    "TRX",
     "AVAX",
-    "SHIB",
     "LINK",
     "DOT",
     "BCH",
@@ -24,9 +22,24 @@ TOP_20_MARKET_COINS: tuple[str, ...] = (
     "UNI",
     "NEAR",
     "ATOM",
-    "ETC",
     "HBAR",
+    "AAVE",
+    "ALGO",
+    "APT",
+    "ARB",
+    "FET",
+    "FIL",
+    "ICP",
+    "INJ",
+    "OP",
+    "SUI",
+    "TIA",
+    "RUNE",
+    "SEI",
 )
+
+# Backward-compatible alias retained for existing callers.
+TOP_20_MARKET_COINS: tuple[str, ...] = UNIVERSE_V1_COINS
 
 
 @dataclass(frozen=True)
@@ -43,7 +56,7 @@ class UniverseResolution:
 
 
 def resolve_tradable_universe(instruments: list[dict[str, object]]) -> UniverseResolution:
-    """Resolve hardcoded top-20 universe against live NDAX CAD instruments."""
+    """Resolve Universe V1 against live NDAX CAD instruments."""
     cad_by_ticker: dict[str, UniverseEntry] = {}
     for instrument in instruments:
         base_symbol = str(instrument.get("Product1Symbol", "")).upper()
@@ -60,7 +73,7 @@ def resolve_tradable_universe(instruments: list[dict[str, object]]) -> UniverseR
 
     tradable: list[UniverseEntry] = []
     skipped: dict[str, str] = {}
-    for ticker in TOP_20_MARKET_COINS:
+    for ticker in UNIVERSE_V1_COINS:
         entry = cad_by_ticker.get(ticker)
         if entry is None:
             skipped[ticker] = "no_ndax_cad_pair"

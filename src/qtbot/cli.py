@@ -89,6 +89,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="Fail ndax-check if private balance retrieval cannot be completed.",
     )
 
+    data_backfill_parser = subparsers.add_parser(
+        "data-backfill",
+        help="Backfill NDAX candle data into local storage.",
+    )
+    data_backfill_parser.add_argument(
+        "--from",
+        dest="from_date",
+        required=True,
+        help="Start date in YYYY-MM-DD (UTC).",
+    )
+    data_backfill_parser.add_argument(
+        "--to",
+        dest="to_date",
+        required=True,
+        help="End date in YYYY-MM-DD (UTC).",
+    )
+    data_backfill_parser.add_argument(
+        "--timeframe",
+        default="15m",
+        help="Candle timeframe alias (currently supports 15m).",
+    )
+
+    data_status_parser = subparsers.add_parser(
+        "data-status",
+        help="Show local candle coverage and gap status.",
+    )
+    data_status_parser.add_argument(
+        "--timeframe",
+        default="15m",
+        help="Timeframe alias to inspect (currently supports 15m).",
+    )
+
     staging_parser = subparsers.add_parser(
         "staging-validate",
         help="Run M10 staging validation workflow and emit JSON report.",
@@ -195,6 +227,18 @@ def main(argv: list[str] | None = None) -> int:
             to_date=args.to_date,
             skip_balances=args.skip_balances,
             require_balances=args.require_balances,
+        )
+    if command == "data-backfill":
+        return _handle_data_backfill(
+            config=config,
+            from_date=args.from_date,
+            to_date=args.to_date,
+            timeframe=args.timeframe,
+        )
+    if command == "data-status":
+        return _handle_data_status(
+            config=config,
+            timeframe=args.timeframe,
         )
     if command == "staging-validate":
         return _handle_staging_validate(
@@ -455,6 +499,48 @@ def _handle_ndax_check(
     return 0
 
 
+def _handle_data_backfill(
+    *,
+    config: RuntimeConfig,
+    from_date: str,
+    to_date: str,
+    timeframe: str,
+) -> int:
+    try:
+        parsed_from = _parse_date(from_date)
+        parsed_to = _parse_date(to_date)
+        if parsed_from > parsed_to:
+            raise ValueError("--from must be <= --to")
+
+        service = _make_data_service(config)
+        summary = service.backfill(
+            from_date=parsed_from,
+            to_date=parsed_to,
+            timeframe=timeframe,
+        )
+    except (NdaxError, ValueError) as exc:
+        print(f"Data backfill failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(json.dumps(summary.to_payload(), indent=2, sort_keys=True))
+    return 0 if summary.symbols_with_errors == 0 else 1
+
+
+def _handle_data_status(
+    *,
+    config: RuntimeConfig,
+    timeframe: str,
+) -> int:
+    try:
+        service = _make_data_service(config)
+        summary = service.data_status(timeframe=timeframe)
+    except (NdaxError, ValueError) as exc:
+        print(f"Data status failed: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(summary.to_payload(), indent=2, sort_keys=True))
+    return 0
+
+
 def _handle_staging_validate(
     *,
     config: RuntimeConfig,
@@ -523,6 +609,19 @@ def _make_ndax_client(config: RuntimeConfig) -> NdaxClient:
         oms_id=config.ndax_oms_id,
         timeout_seconds=config.ndax_timeout_seconds,
         max_retries=config.ndax_max_retries,
+    )
+
+
+def _make_data_service(config: RuntimeConfig):
+    # Lazy import keeps non-data commands resilient if optional parquet dependency is absent.
+    from qtbot.data import MarketDataService
+
+    client = _make_ndax_client(config)
+    state_store = StateStore(config.state_db)
+    return MarketDataService(
+        config=config,
+        ndax_client=client,
+        state_store=state_store,
     )
 
 

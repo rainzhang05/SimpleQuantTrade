@@ -687,8 +687,85 @@ class StateStore:
                 raise ValueError("risk_state row missing.")
             return int(row["consecutive_error_count"])
 
+    def upsert_data_coverage(
+        self,
+        *,
+        symbol: str,
+        timeframe: str,
+        first_ts: int | None,
+        last_ts: int | None,
+        row_count: int,
+        gap_count: int,
+    ) -> None:
+        if not symbol.strip():
+            raise ValueError("symbol cannot be empty.")
+        if not timeframe.strip():
+            raise ValueError("timeframe cannot be empty.")
+        if row_count < 0:
+            raise ValueError("row_count must be >= 0.")
+        if gap_count < 0:
+            raise ValueError("gap_count must be >= 0.")
+        now = utc_now_iso()
+        with self._connect() as conn:
+            self._apply_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO data_coverage (
+                    symbol,
+                    timeframe,
+                    first_ts,
+                    last_ts,
+                    row_count,
+                    gap_count,
+                    updated_at_utc
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(symbol, timeframe) DO UPDATE SET
+                    first_ts = excluded.first_ts,
+                    last_ts = excluded.last_ts,
+                    row_count = excluded.row_count,
+                    gap_count = excluded.gap_count,
+                    updated_at_utc = excluded.updated_at_utc
+                """,
+                (
+                    symbol.upper(),
+                    timeframe,
+                    first_ts,
+                    last_ts,
+                    row_count,
+                    gap_count,
+                    now,
+                ),
+            )
+
+    def get_data_coverage(self, *, timeframe: str | None = None) -> list[dict[str, object]]:
+        if not self._db_path.exists():
+            return []
+        with self._connect() as conn:
+            self._apply_schema(conn)
+            if timeframe is None:
+                rows = conn.execute(
+                    """
+                    SELECT symbol, timeframe, first_ts, last_ts, row_count, gap_count, updated_at_utc
+                    FROM data_coverage
+                    ORDER BY symbol, timeframe
+                    """
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT symbol, timeframe, first_ts, last_ts, row_count, gap_count, updated_at_utc
+                    FROM data_coverage
+                    WHERE timeframe = ?
+                    ORDER BY symbol
+                    """,
+                    (timeframe,),
+                ).fetchall()
+            return [dict(row) for row in rows]
+
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self._db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
@@ -763,6 +840,20 @@ class StateStore:
                 daily_realized_anchor_cad REAL NOT NULL,
                 consecutive_error_count INTEGER NOT NULL DEFAULT 0,
                 updated_at_utc TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS data_coverage (
+                symbol TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                first_ts INTEGER,
+                last_ts INTEGER,
+                row_count INTEGER NOT NULL DEFAULT 0,
+                gap_count INTEGER NOT NULL DEFAULT 0,
+                updated_at_utc TEXT NOT NULL,
+                PRIMARY KEY(symbol, timeframe)
             )
             """
         )

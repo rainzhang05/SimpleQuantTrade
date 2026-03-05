@@ -163,6 +163,54 @@ class CliHandlerTests(unittest.TestCase):
                 payload = json.loads(out)
                 self.assertTrue(payload["balance_check_skipped"])
 
+    def test_handle_data_backfill(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = make_runtime_config(Path(td))
+            summary = mock.Mock()
+            summary.symbols_with_errors = 0
+            summary.to_payload.return_value = {
+                "timeframe": "15m",
+                "symbols_processed": 2,
+                "symbols_with_errors": 0,
+            }
+            service = mock.Mock()
+            service.backfill.return_value = summary
+            with mock.patch("qtbot.cli._make_data_service", return_value=service):
+                code, out, err = _capture_output(
+                    cli._handle_data_backfill,
+                    config=cfg,
+                    from_date="2026-01-01",
+                    to_date="2026-01-31",
+                    timeframe="15m",
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(err, "")
+            payload = json.loads(out)
+            self.assertEqual(payload["timeframe"], "15m")
+            service.backfill.assert_called_once()
+
+    def test_handle_data_status(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = make_runtime_config(Path(td))
+            summary = mock.Mock()
+            summary.to_payload.return_value = {
+                "timeframe": "15m",
+                "symbols_total": 5,
+            }
+            service = mock.Mock()
+            service.data_status.return_value = summary
+            with mock.patch("qtbot.cli._make_data_service", return_value=service):
+                code, out, err = _capture_output(
+                    cli._handle_data_status,
+                    config=cfg,
+                    timeframe="15m",
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(err, "")
+            payload = json.loads(out)
+            self.assertEqual(payload["symbols_total"], 5)
+            service.data_status.assert_called_once_with(timeframe="15m")
+
     def test_handle_start_and_main_dispatch(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = make_runtime_config(Path(td))

@@ -10,7 +10,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "SimpleQuantTrade" }]
-dependencies = []
+dependencies = [
+  "pyarrow>=14.0.0",
+]
 
 [project.scripts]
 qtbot = "qtbot.cli:main"

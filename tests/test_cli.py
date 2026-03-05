@@ -67,6 +67,30 @@ class CliTests(unittest.TestCase):
         self.assertTrue(args.offline_only)
         self.assertTrue(args.require_discord)
 
+    def test_parser_accepts_data_backfill_flags(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "data-backfill",
+                "--from",
+                "2026-01-01",
+                "--to",
+                "2026-03-05",
+                "--timeframe",
+                "15m",
+            ]
+        )
+        self.assertEqual(args.command, "data-backfill")
+        self.assertEqual(args.from_date, "2026-01-01")
+        self.assertEqual(args.to_date, "2026-03-05")
+        self.assertEqual(args.timeframe, "15m")
+
+    def test_parser_accepts_data_status_flags(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["data-status", "--timeframe", "15m"])
+        self.assertEqual(args.command, "data-status")
+        self.assertEqual(args.timeframe, "15m")
+
 
 if __name__ == "__main__":
     unittest.main()
