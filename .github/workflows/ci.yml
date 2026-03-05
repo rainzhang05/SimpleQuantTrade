@@ -45,3 +45,30 @@ jobs:
         with:
           name: coverage-xml-py${{ matrix.python-version }}
           path: coverage.xml
+
+  docker:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t simplequanttrade:ci .
+
+      - name: Validate container CLI lifecycle commands with persistent runtime mount
+        run: |
+          rm -rf runtime_ci
+          mkdir -p runtime_ci
+          docker run --rm -v "$PWD/runtime_ci:/app/runtime" simplequanttrade:ci status >/tmp/qtbot-status.json
+          docker run --rm -v "$PWD/runtime_ci:/app/runtime" simplequanttrade:ci pause
+          grep -q '"command": "PAUSE"' runtime_ci/control.json
+          docker run --rm -v "$PWD/runtime_ci:/app/runtime" simplequanttrade:ci resume
+          grep -q '"command": "RUN"' runtime_ci/control.json
+          docker run --rm -v "$PWD/runtime_ci:/app/runtime" simplequanttrade:ci stop
+          grep -q '"command": "STOP"' runtime_ci/control.json
+
+      - name: Validate docker compose file
+        run: |
+          cp .env.example .env
+          docker compose -f docker-compose.yml config >/tmp/docker-compose.resolved.yml

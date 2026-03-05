@@ -1,0 +1,15 @@
+services:
+  qtbot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: simplequanttrade:latest
+    env_file:
+      - .env
+    command: ["start", "--budget", "${QTBOT_START_BUDGET_CAD:-1000}"]
+    volumes:
+      - ./runtime:/app/runtime
+    init: true
+    restart: unless-stopped
+    stop_signal: SIGTERM
+    stop_grace_period: 45s

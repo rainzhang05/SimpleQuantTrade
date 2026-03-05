@@ -9,6 +9,8 @@ Hard constraints:
 - Credentials from `.env`:
   - `NDAX_API_KEY`
   - `NDAX_API_SECRET`
+  - `NDAX_USER_ID`
+  - `NDAX_USERNAME` (optional)
 - Spot-only, no margin/leverage/borrowing/shorting.
 - CAD budget virtual sub-account model (`--budget`-based internal cash ledger).
 - BTC/ETH are permanently locked (no buy/sell, excluded from logic).
@@ -330,6 +332,36 @@ M8 validation evidence:
 Exit criteria:
 - Bot is reproducible and operable in containerized production deployment.
 
+M9 implementation status:
+- [x] Added production Docker image definition in `Dockerfile` using Python 3.11 and `qtbot` entrypoint.
+- [x] Added `.dockerignore` to prevent runtime artifacts, tests, VCS metadata, and local `.env` secrets from entering build context.
+- [x] Added `docker-compose.yml` runtime service with:
+  - persistent `./runtime:/app/runtime` volume mount,
+  - `.env` loading,
+  - startup command `start --budget ${QTBOT_START_BUDGET_CAD:-1000}`,
+  - `init`, `restart`, `stop_signal`, and `stop_grace_period` operational settings.
+- [x] Added compose startup-budget default to `.env.example` (`QTBOT_START_BUDGET_CAD=1000`).
+- [x] Updated docs with container build/run and lifecycle control commands.
+- [x] Added phase-appropriate test + CI coverage for packaging:
+  - `tests/test_docker_packaging.py`
+  - new `docker` job in `.github/workflows/ci.yml`.
+
+M9 validation evidence:
+- Compile check: `python3 -m compileall src` passed.
+- Unit/integration suite: `PYTHONPATH=src python3 -m unittest discover -s tests -p "test_*.py"` passed (`92` tests).
+- Coverage gate: `PYTHONPATH=src coverage run --source=src/qtbot -m unittest discover -s tests -p "test_*.py"` and `coverage report --show-missing --fail-under=85` passed at `86%`.
+- Docker build: `docker build -t simplequanttrade:m9 .` succeeded.
+- Containerized lifecycle command checks with persistent mount passed:
+  - `docker run --rm -v "$PWD/runtime_m9_check:/app/runtime" simplequanttrade:m9 status`
+  - `docker run --rm -v "$PWD/runtime_m9_check:/app/runtime" simplequanttrade:m9 pause`
+  - `docker run --rm -v "$PWD/runtime_m9_check:/app/runtime" simplequanttrade:m9 resume`
+  - `docker run --rm -v "$PWD/runtime_m9_check:/app/runtime" simplequanttrade:m9 stop`
+- Container start/stop smoke run passed:
+  - start container with `qtbot start --budget 1000`,
+  - send external `stop` command from second container on shared runtime volume,
+  - runner exited gracefully with persisted `STOPPED` status.
+- Compose validation: `docker compose -f docker-compose.yml config` resolved successfully.
+
 ### M10: Staging Validation
 - Run continuous dry-run in staging with live NDAX data.
 - Exercise lifecycle commands and failure scenarios.
@@ -487,6 +519,7 @@ Defaults:
 - Discord alert timeout (`QTBOT_DISCORD_TIMEOUT_SECONDS`): `8`.
 - Discord alert retries (`QTBOT_DISCORD_MAX_RETRIES`): `2`.
 - Discord webhook (`QTBOT_DISCORD_WEBHOOK_URL`): unset by default (alerts disabled until configured).
+- Docker compose startup budget (`QTBOT_START_BUDGET_CAD`): `1000`.
 
 Documentation policy:
 - NDAX naming remains canonical in all docs.

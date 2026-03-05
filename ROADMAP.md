@@ -378,6 +378,15 @@ Acceptance:
 Acceptance:
 - operator receives actionable operational alerts without blocking trading process safety paths
 
+### M9: Docker Production Packaging
+- build Python 3.11 production image with `qtbot` entrypoint
+- add `docker-compose` service using `.env` + persistent `runtime/` volume
+- document container lifecycle operations (`start`, `pause`, `resume`, `stop`, `status`)
+Acceptance:
+- reproducible container build and successful `qtbot status` execution in-container
+- compose deployment preserves runtime state/log artifacts across restarts
+- control-plane commands remain operable from another terminal via `docker compose exec`
+
 ---
 
 ## 11) Defaults Summary (Chosen to Match “Fast Live Evaluation” + “Hours to Days Holding”)
@@ -398,6 +407,7 @@ Acceptance:
 - Discord alert timeout: **8s**
 - Discord alert retries: **2**
 - Discord webhook URL: unset by default (alerts disabled unless configured)
+- Docker compose startup budget (`QTBOT_START_BUDGET_CAD`): **1000 CAD**
 
 All defaults should be placed in a single config module/file.
 

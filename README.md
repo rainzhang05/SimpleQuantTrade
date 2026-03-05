@@ -1,7 +1,7 @@
 # SimpleQuantTrade
 A simple fixed-rule quantitative crypto trading system that runs as a command-line bot on NDAX, with live evaluation at the smallest practical cadence.
 
-## Current CLI (M1-M8)
+## Current CLI (M1-M9)
 
 - `qtbot start --budget <CAD>`
 - `qtbot pause`
@@ -58,6 +58,20 @@ Copy `.env.example` to `.env` and fill NDAX credentials before private API check
   - reconciliation anomalies,
   - risk-triggered trading halts.
 
+## M9 Docker Production Packaging
+
+- Build image:
+  - `docker build -t simplequanttrade:latest .`
+- Start with compose (uses `.env`, persistent `./runtime` volume):
+  - `docker compose up -d qtbot`
+- Control lifecycle from another terminal:
+  - `docker compose exec qtbot qtbot status`
+  - `docker compose exec qtbot qtbot pause`
+  - `docker compose exec qtbot qtbot resume`
+  - `docker compose exec qtbot qtbot stop`
+- Default compose startup budget is controlled by:
+  - `QTBOT_START_BUDGET_CAD` (defaults to `1000` if unset)
+
 ## Testing and CI
 
 - Local test run:
@@ -65,4 +79,6 @@ Copy `.env.example` to `.env` and fill NDAX credentials before private API check
 - Coverage run:
   - `PYTHONPATH=src coverage run --source=src/qtbot -m unittest discover -s tests -p "test_*.py"`
   - `coverage report --show-missing`
-- GitHub Actions CI runs compile checks plus this test suite on every push and pull request.
+- GitHub Actions CI runs:
+  - compile + unit test + coverage gates
+  - Docker image build and containerized CLI/compose validation checks
