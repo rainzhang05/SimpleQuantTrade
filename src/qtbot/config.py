@@ -28,6 +28,19 @@ class RuntimeConfig:
     ndax_oms_id: int
     ndax_timeout_seconds: float
     ndax_max_retries: int
+    signal_interval_seconds: int
+    ema_fast_period: int
+    ema_slow_period: int
+    atr_period: int
+    stop_k: float
+    max_hold_hours: int
+    cooldown_minutes: int
+    max_new_entries_per_cycle: int
+    enable_live_trading: bool
+    taker_fee_rate: float
+    min_order_notional_cad: float
+    order_status_poll_seconds: float
+    order_status_max_attempts: int
 
 
 def load_runtime_config() -> RuntimeConfig:
@@ -54,6 +67,44 @@ def load_runtime_config() -> RuntimeConfig:
     if ndax_max_retries < 0:
         raise ValueError("NDAX_MAX_RETRIES must be >= 0.")
 
+    signal_interval_seconds = int(os.getenv("QTBOT_SIGNAL_INTERVAL_SECONDS", "60"))
+    if signal_interval_seconds <= 0:
+        raise ValueError("QTBOT_SIGNAL_INTERVAL_SECONDS must be > 0.")
+
+    ema_fast_period = int(os.getenv("QTBOT_EMA_FAST", "60"))
+    ema_slow_period = int(os.getenv("QTBOT_EMA_SLOW", "360"))
+    atr_period = int(os.getenv("QTBOT_ATR_PERIOD", "60"))
+    if min(ema_fast_period, ema_slow_period, atr_period) <= 0:
+        raise ValueError("Indicator periods must be > 0.")
+
+    stop_k = float(os.getenv("QTBOT_STOP_K", "2.5"))
+    if stop_k <= 0:
+        raise ValueError("QTBOT_STOP_K must be > 0.")
+
+    max_hold_hours = int(os.getenv("QTBOT_MAX_HOLD_HOURS", "48"))
+    cooldown_minutes = int(os.getenv("QTBOT_COOLDOWN_MINUTES", "30"))
+    max_new_entries_per_cycle = int(os.getenv("QTBOT_MAX_NEW_ENTRIES_PER_CYCLE", "3"))
+    if max_hold_hours <= 0 or cooldown_minutes < 0 or max_new_entries_per_cycle <= 0:
+        raise ValueError("Hold/cooldown/entry limits are invalid.")
+
+    enable_live_trading = _parse_bool(os.getenv("QTBOT_ENABLE_LIVE_TRADING", "false"))
+
+    taker_fee_rate = float(os.getenv("QTBOT_TAKER_FEE_RATE", "0.004"))
+    if taker_fee_rate < 0:
+        raise ValueError("QTBOT_TAKER_FEE_RATE must be >= 0.")
+
+    min_order_notional_cad = float(os.getenv("QTBOT_MIN_ORDER_NOTIONAL_CAD", "25"))
+    if min_order_notional_cad <= 0:
+        raise ValueError("QTBOT_MIN_ORDER_NOTIONAL_CAD must be > 0.")
+
+    order_status_poll_seconds = float(os.getenv("QTBOT_ORDER_STATUS_POLL_SECONDS", "2"))
+    if order_status_poll_seconds <= 0:
+        raise ValueError("QTBOT_ORDER_STATUS_POLL_SECONDS must be > 0.")
+
+    order_status_max_attempts = int(os.getenv("QTBOT_ORDER_STATUS_MAX_ATTEMPTS", "15"))
+    if order_status_max_attempts <= 0:
+        raise ValueError("QTBOT_ORDER_STATUS_MAX_ATTEMPTS must be > 0.")
+
     runtime_dir = _resolve_runtime_dir(os.getenv("QTBOT_RUNTIME_DIR", "runtime"))
     return RuntimeConfig(
         cadence_seconds=cadence_seconds,
@@ -66,4 +117,26 @@ def load_runtime_config() -> RuntimeConfig:
         ndax_oms_id=ndax_oms_id,
         ndax_timeout_seconds=ndax_timeout_seconds,
         ndax_max_retries=ndax_max_retries,
+        signal_interval_seconds=signal_interval_seconds,
+        ema_fast_period=ema_fast_period,
+        ema_slow_period=ema_slow_period,
+        atr_period=atr_period,
+        stop_k=stop_k,
+        max_hold_hours=max_hold_hours,
+        cooldown_minutes=cooldown_minutes,
+        max_new_entries_per_cycle=max_new_entries_per_cycle,
+        enable_live_trading=enable_live_trading,
+        taker_fee_rate=taker_fee_rate,
+        min_order_notional_cad=min_order_notional_cad,
+        order_status_poll_seconds=order_status_poll_seconds,
+        order_status_max_attempts=order_status_max_attempts,
     )
+
+
+def _parse_bool(raw_value: str) -> bool:
+    value = raw_value.strip().lower()
+    if value in {"1", "true", "yes", "y", "on"}:
+        return True
+    if value in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"Invalid boolean value: {raw_value}")

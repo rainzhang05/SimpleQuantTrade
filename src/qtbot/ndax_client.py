@@ -9,7 +9,7 @@ import hmac
 import json
 import random
 import time
-from typing import Any
+from typing import Any, Literal
 from urllib import error, parse, request
 
 
@@ -19,6 +19,10 @@ class NdaxError(RuntimeError):
 
 class NdaxAuthenticationError(NdaxError):
     """Raised when NDAX credentials are missing or rejected."""
+
+
+class NdaxOrderRejectedError(NdaxError):
+    """Raised when NDAX rejects order placement or reports a terminal failure."""
 
 
 @dataclass(frozen=True)
@@ -38,6 +42,31 @@ class NdaxBalance:
     @property
     def available(self) -> float:
         return self.amount - self.hold
+
+
+OrderSide = Literal["BUY", "SELL"]
+
+SIDE_TO_NDAX: dict[OrderSide, int] = {"BUY": 0, "SELL": 1}
+MARKET_ORDER_TYPE = 1
+TIME_IN_FORCE_GTC = 1
+
+
+@dataclass(frozen=True)
+class NdaxOrderAcceptance:
+    order_id: int
+    client_order_id: int
+    instrument_id: int
+    side: OrderSide
+    raw_status: str | None
+
+
+@dataclass(frozen=True)
+class NdaxOrderFill:
+    order_id: int
+    qty_executed: float
+    avg_price: float
+    order_state: str | None
+    raw: dict[str, Any]
 
 
 class NdaxClient:
@@ -162,6 +191,141 @@ class NdaxClient:
             balances.append(NdaxBalance(product_symbol=symbol, amount=amount, hold=hold))
         return account_id, balances
 
+    def send_market_order(
+        self,
+        *,
+        credentials: NdaxCredentials,
+        account_id: int,
+        instrument_id: int,
+        side: OrderSide,
+        quantity: float,
+        client_order_id: int,
+    ) -> NdaxOrderAcceptance:
+        if quantity <= 0:
+            raise ValueError("quantity must be > 0 for market orders.")
+        payload = {
+            "OMSId": self._oms_id,
+            "AccountId": account_id,
+            "InstrumentId": instrument_id,
+            "ClientOrderId": client_order_id,
+            "Side": SIDE_TO_NDAX[side],
+            "Quantity": quantity,
+            "OrderType": MARKET_ORDER_TYPE,
+            "TimeInForce": TIME_IN_FORCE_GTC,
+            "UseDisplayQuantity": False,
+        }
+        response = self._api_post_private(
+            "SendOrder",
+            json_body=payload,
+            credentials=credentials,
+        )
+        if not isinstance(response, dict):
+            raise NdaxOrderRejectedError("NDAX SendOrder returned non-object response.")
+
+        order_id = _safe_int(response.get("OrderId"))
+        if order_id is None:
+            detail = response.get("errormsg") or response.get("detail") or response
+            raise NdaxOrderRejectedError(f"NDAX SendOrder did not return OrderId: {detail}")
+
+        return NdaxOrderAcceptance(
+            order_id=order_id,
+            client_order_id=client_order_id,
+            instrument_id=instrument_id,
+            side=side,
+            raw_status=_optional_str(response.get("OrderState") or response.get("Status")),
+        )
+
+    def get_order_status(
+        self,
+        *,
+        credentials: NdaxCredentials,
+        account_id: int,
+        order_id: int,
+    ) -> list[dict[str, Any]]:
+        params = {
+            "OMSId": self._oms_id,
+            "AccountId": account_id,
+            "OrderId": order_id,
+        }
+        response = self._api_get_private(
+            "GetOrderStatus",
+            params=params,
+            credentials=credentials,
+        )
+        if isinstance(response, dict):
+            return [response]
+        if isinstance(response, list):
+            return [item for item in response if isinstance(item, dict)]
+        raise NdaxError("GetOrderStatus returned unsupported response type.")
+
+    def wait_for_fill(
+        self,
+        *,
+        credentials: NdaxCredentials,
+        account_id: int,
+        order_id: int,
+        poll_seconds: float,
+        max_attempts: int,
+    ) -> NdaxOrderFill:
+        if max_attempts <= 0:
+            raise ValueError("max_attempts must be > 0.")
+        if poll_seconds <= 0:
+            raise ValueError("poll_seconds must be > 0.")
+
+        last_row: dict[str, Any] | None = None
+        for attempt in range(max_attempts):
+            rows = self.get_order_status(
+                credentials=credentials,
+                account_id=account_id,
+                order_id=order_id,
+            )
+            row = _pick_order_row(rows=rows, order_id=order_id)
+            if row is not None:
+                last_row = row
+                filled_qty = _safe_float(row.get("QuantityExecuted"))
+                if filled_qty <= 0:
+                    filled_qty = _safe_float(row.get("Quantity"))
+                avg_price = _safe_float(row.get("AvgPrice"))
+                if avg_price <= 0:
+                    avg_price = _safe_float(row.get("Price"))
+                state = _optional_str(row.get("OrderState"))
+                if filled_qty > 0 and (avg_price > 0 or _is_terminal_state(state)):
+                    return NdaxOrderFill(
+                        order_id=order_id,
+                        qty_executed=filled_qty,
+                        avg_price=avg_price,
+                        order_state=state,
+                        raw=row,
+                    )
+                if _is_terminal_state(state):
+                    detail = row.get("ErrorMessage") or row.get("RejectReason") or state
+                    raise NdaxOrderRejectedError(
+                        f"NDAX order {order_id} reached terminal state without fill: {detail}"
+                    )
+            if attempt < max_attempts - 1:
+                time.sleep(poll_seconds)
+
+        if last_row is not None:
+            filled_qty = _safe_float(last_row.get("QuantityExecuted"))
+            if filled_qty <= 0:
+                filled_qty = _safe_float(last_row.get("Quantity"))
+            avg_price = _safe_float(last_row.get("AvgPrice")) or _safe_float(last_row.get("Price"))
+            state = _optional_str(last_row.get("OrderState"))
+            if filled_qty > 0 and avg_price > 0:
+                return NdaxOrderFill(
+                    order_id=order_id,
+                    qty_executed=filled_qty,
+                    avg_price=avg_price,
+                    order_state=state,
+                    raw=last_row,
+                )
+            raise NdaxOrderRejectedError(
+                f"NDAX order {order_id} was not filled after {max_attempts} polls. state={state}"
+            )
+        raise NdaxOrderRejectedError(
+            f"NDAX order {order_id} status could not be confirmed after {max_attempts} polls."
+        )
+
     def authenticate(self, *, credentials: NdaxCredentials) -> None:
         params = self._build_private_auth_params(credentials)
         payload = self._api_get("AuthenticateUser", params=params)
@@ -184,6 +348,16 @@ class NdaxClient:
     ) -> Any:
         headers = self._build_private_headers(credentials)
         return self._request("GET", endpoint, params=params, headers=headers, json_body=None)
+
+    def _api_post_private(
+        self,
+        endpoint: str,
+        *,
+        json_body: dict[str, Any],
+        credentials: NdaxCredentials,
+    ) -> Any:
+        headers = self._build_private_headers(credentials)
+        return self._request("POST", endpoint, params=None, headers=headers, json_body=json_body)
 
     def _build_private_headers(self, credentials: NdaxCredentials) -> dict[str, str]:
         auth = self._build_private_auth_params(credentials)
@@ -326,3 +500,41 @@ def _safe_float(value: Any) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return text
+
+
+def _pick_order_row(*, rows: list[dict[str, Any]], order_id: int) -> dict[str, Any] | None:
+    if not rows:
+        return None
+    for row in rows:
+        row_order_id = _safe_int(row.get("OrderId"))
+        if row_order_id == order_id:
+            return row
+    return rows[0]
+
+
+def _is_terminal_state(raw_state: str | None) -> bool:
+    if raw_state is None:
+        return False
+    normalized = raw_state.strip().lower()
+    terminal_tokens = {
+        "rejected",
+        "canceled",
+        "cancelled",
+        "expired",
+        "fullyexecuted",
+        "filled",
+        "5",
+        "6",
+        "7",
+        "8",
+    }
+    return normalized in terminal_tokens

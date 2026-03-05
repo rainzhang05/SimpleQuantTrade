@@ -141,6 +141,20 @@ Exit criteria:
 - Stable reproducible signals for identical inputs.
 - No live orders while dry-run mode is enabled.
 
+M3 implementation status:
+- [x] Indicator module added with EMA and ATR calculations.
+- [x] Signal module added with deterministic ENTER/EXIT/HOLD rule evaluation.
+- [x] Runner integrated with strategy engine for per-cycle dry-run evaluation.
+- [x] Decision logging implemented in append-only `runtime/logs/decisions.csv`.
+- [x] Entry candidate ranking and per-cycle cap (`MAX_NEW_ENTRIES_PER_CYCLE`) enforced.
+- [x] No execution path enabled from strategy loop (signals only).
+
+M3 validation evidence:
+- Compile check: `python3 -m compileall src` passed.
+- Live loop validation: `QTBOT_CADENCE_SECONDS=5 PYTHONPATH=src python3 -m qtbot start --budget 1000` produced strategy cycle logs.
+- Decision log validation: `runtime/logs/decisions.csv` created with required columns and signal rows.
+- Graceful lifecycle validation retained: start/pause/resume/stop behavior still works after strategy integration.
+
 ### M4: Live Execution and Ledger
 - Enable market order execution path.
 - Confirm fills and compute effective fees per fill.
@@ -150,6 +164,21 @@ Exit criteria:
 Exit criteria:
 - Filled orders reconcile with ledger updates.
 - Budget and lock constraints remain enforced.
+
+M4 implementation status:
+- [x] NDAX client extended with private order endpoints (`SendOrder`, `GetOrderStatus`) and fill polling.
+- [x] Live execution engine added to process ENTER/EXIT decisions into market orders with per-order control-plane checks.
+- [x] Ledger accounting module added with fee-aware buy/sell updates and realized PnL computation.
+- [x] State persistence extended with transactional fill application and totals (`bot_cash_cad`, `realized_pnl_cad`, `fees_paid_cad`).
+- [x] Trade logging implemented in append-only `runtime/logs/trades.csv`.
+- [x] Runner integrated with execution stage after each strategy cycle.
+
+M4 validation evidence:
+- Compile check: `python3 -m compileall src` passed after M4 code changes.
+- Lifecycle smoke run (execution disabled): `QTBOT_RUNTIME_DIR=runtime_m4_test QTBOT_CADENCE_SECONDS=2 PYTHONPATH=src python3 -m qtbot start --budget 1000` ran cleanly and stopped gracefully.
+- State schema validation: `qtbot status` now reports `realized_pnl_cad` and `fees_paid_cad` fields.
+- Decision stream validation: `runtime_m4_test/logs/decisions.csv` populated during loop.
+- Dry-run safety validation: `runtime_m4_test/logs/trades.csv` remained absent while `QTBOT_ENABLE_LIVE_TRADING=false`.
 
 ### M5: Restart Reconciliation (NDAX as Truth)
 - On startup, load prior state and query NDAX balances.

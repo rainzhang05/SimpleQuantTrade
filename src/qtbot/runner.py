@@ -12,8 +12,13 @@ import time
 
 from qtbot.config import RuntimeConfig
 from qtbot.control import Command, read_control, write_control
+from qtbot.decision_log import DecisionCsvLogger
+from qtbot.execution import LiveExecutionEngine
 from qtbot.logging_setup import configure_logging
+from qtbot.ndax_client import NdaxClient, NdaxError
 from qtbot.state import StateStore
+from qtbot.strategy.engine import StrategyEngine
+from qtbot.trade_log import TradeCsvLogger
 
 
 def utc_now_iso() -> str:
@@ -92,6 +97,27 @@ class BotRunner:
             logger = configure_logging(self._config.log_file)
             state_store = StateStore(self._config.state_db)
             state_store.initialize(initial_budget_cad=self._budget_cad)
+            ndax_client = NdaxClient(
+                base_url=self._config.ndax_base_url,
+                oms_id=self._config.ndax_oms_id,
+                timeout_seconds=self._config.ndax_timeout_seconds,
+                max_retries=self._config.ndax_max_retries,
+            )
+            decision_logger = DecisionCsvLogger(self._config.runtime_dir / "logs" / "decisions.csv")
+            trade_logger = TradeCsvLogger(self._config.runtime_dir / "logs" / "trades.csv")
+            strategy_engine = StrategyEngine(
+                config=self._config,
+                ndax_client=ndax_client,
+                state_store=state_store,
+                decision_logger=decision_logger,
+            )
+            execution_engine = LiveExecutionEngine(
+                config=self._config,
+                ndax_client=ndax_client,
+                state_store=state_store,
+                trade_logger=trade_logger,
+                logger=logger,
+            )
 
             write_control(
                 self._config.control_file,
@@ -157,16 +183,35 @@ class BotRunner:
                     time.sleep(min(1.0, next_loop_at - now))
                     continue
 
-                loop_started_at = utc_now_iso()
-                # M1 scope: no strategy/execution yet, only heartbeat and persistence.
+                loop_started_dt = datetime.now(timezone.utc)
+                loop_started_at = loop_started_dt.replace(microsecond=0).isoformat()
+                event_detail = "cycle_completed"
+                try:
+                    summary = strategy_engine.evaluate_cycle(now_utc=loop_started_dt)
+                    execution_summary = execution_engine.execute_decisions(
+                        now_utc=loop_started_dt,
+                        decisions=summary.decisions,
+                        tradable=summary.tradable,
+                    )
+                    event_detail = f"{summary.message}; {execution_summary.message}"
+                    logger.info("Strategy cycle completed. %s", summary.message)
+                    if self._config.enable_live_trading:
+                        logger.info("Execution cycle completed. %s", execution_summary.message)
+                except NdaxError as exc:
+                    event_detail = f"cycle_failed: {exc}"
+                    logger.error("Cycle failed: %s", exc)
+                except Exception as exc:  # pragma: no cover - defensive safety
+                    event_detail = f"cycle_unexpected_error: {exc}"
+                    logger.exception("Unexpected cycle failure: %s", exc)
+
                 loop_completed_at = utc_now_iso()
                 loop_count = state_store.record_loop(
                     last_command=Command.RUN.value,
                     loop_started_at_utc=loop_started_at,
                     loop_completed_at_utc=loop_completed_at,
-                    event_detail="loop heartbeat persisted",
+                    event_detail=event_detail,
                 )
-                logger.info("Loop heartbeat completed. loop_count=%s", loop_count)
+                logger.info("Loop persisted. loop_count=%s", loop_count)
 
                 now_after = time.monotonic()
                 next_loop_at = max(next_loop_at + self._config.cadence_seconds, now_after)
