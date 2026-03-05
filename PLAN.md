@@ -370,6 +370,46 @@ M9 validation evidence:
 Exit criteria:
 - Staging run proves operational stability before production.
 
+M10 implementation status:
+- [x] Added dedicated M10 staging orchestration module: `src/qtbot/staging.py`.
+- [x] Added CLI command: `qtbot staging-validate` with controls:
+  - `--budget`
+  - `--cadence-seconds`
+  - `--min-loops`
+  - `--timeout-seconds`
+  - `--offline-only` (CI/no-network mode)
+- [x] Implemented full live staging workflow:
+  - NDAX public health check (`ndax-pairs`),
+  - continuous dry-run loop drill with lifecycle commands (`pause`, `resume`, `stop`) from separate CLI calls,
+  - explicit failure-path drill (`ndax-check --symbol INVALIDCAD --skip-balances` expected failure),
+  - reconciliation fault simulation (state mismatch + cash cap convergence checks),
+  - risk fault simulation (daily-loss cap, consecutive-error kill-switch, slippage guard).
+- [x] Added machine-readable staging report output:
+  - stdout JSON summary
+  - persisted file: `runtime/staging_validation/logs/staging_validation_report.json`.
+- [x] Added/updated automated tests for M10:
+  - new `tests/test_staging.py`
+  - updates in `tests/test_cli.py` and `tests/test_cli_handlers.py`.
+- [x] Added phase-appropriate CI workflow coverage:
+  - offline staging validation command step in `.github/workflows/ci.yml`.
+
+M10 validation evidence:
+- Compile check: `python3 -m compileall src` passed.
+- Unit/integration suite: `PYTHONPATH=src python3 -m unittest discover -s tests -p "test_*.py"` passed (`105` tests).
+- Coverage gate: `PYTHONPATH=src coverage run --source=src/qtbot -m unittest discover -s tests -p "test_*.py"` and `coverage report --show-missing --fail-under=85` passed at `86%`.
+- Full live staging run passed:
+  - `PYTHONPATH=src python3 -m qtbot staging-validate --budget 1000 --cadence-seconds 3 --min-loops 2 --timeout-seconds 120`
+  - result: `staging_validation_passed steps=5`
+  - observed steps:
+    - `public_ndax_health_check` passed (`instrument_count=87 tradable_count=16`)
+    - `dry_run_lifecycle_drill` passed (`loop_count=4 decisions_rows=64`)
+    - `cli_failure_scenario_invalid_symbol` passed (expected non-zero)
+    - `reconciliation_fault_simulation` passed
+    - `risk_fault_simulation` passed
+- Offline staging run passed (for CI parity):
+  - `PYTHONPATH=src python3 -m qtbot staging-validate --offline-only --budget 1000 --cadence-seconds 1 --min-loops 1 --timeout-seconds 30`
+  - result: `staging_validation_passed steps=3`.
+
 ### M11: Production Cutover Checklist
 - Confirm all acceptance criteria pass.
 - Start with constrained budget and monitor first cycles.

@@ -1,7 +1,7 @@
 # SimpleQuantTrade
 A simple fixed-rule quantitative crypto trading system that runs as a command-line bot on NDAX, with live evaluation at the smallest practical cadence.
 
-## Current CLI (M1-M9)
+## Current CLI (M1-M10)
 
 - `qtbot start --budget <CAD>`
 - `qtbot pause`
@@ -12,6 +12,7 @@ A simple fixed-rule quantitative crypto trading system that runs as a command-li
 - `qtbot ndax-candles --symbol <NDAX_SYMBOL> --from-date YYYY-MM-DD --to-date YYYY-MM-DD`
 - `qtbot ndax-balances`
 - `qtbot ndax-check`
+- `qtbot staging-validate`
 
 Copy `.env.example` to `.env` and fill NDAX credentials before private API checks.
 
@@ -72,6 +73,16 @@ Copy `.env.example` to `.env` and fill NDAX credentials before private API check
 - Default compose startup budget is controlled by:
   - `QTBOT_START_BUDGET_CAD` (defaults to `1000` if unset)
 
+## M10 Staging Validation
+
+- Run full staging validation (live NDAX public checks + dry-run lifecycle drill + simulated reconciliation/risk faults):
+  - `PYTHONPATH=src python3 -m qtbot staging-validate --budget 1000 --cadence-seconds 3 --min-loops 2 --timeout-seconds 120`
+- Run offline-only staging validation (for CI/local no-network testing):
+  - `PYTHONPATH=src python3 -m qtbot staging-validate --offline-only --budget 1000 --cadence-seconds 1 --min-loops 1 --timeout-seconds 30`
+- Validation outputs:
+  - JSON summary to stdout
+  - persisted report at `runtime/staging_validation/logs/staging_validation_report.json`
+
 ## Testing and CI
 
 - Local test run:
@@ -81,4 +92,5 @@ Copy `.env.example` to `.env` and fill NDAX credentials before private API check
   - `coverage report --show-missing`
 - GitHub Actions CI runs:
   - compile + unit test + coverage gates
+  - offline staging validation CLI check
   - Docker image build and containerized CLI/compose validation checks

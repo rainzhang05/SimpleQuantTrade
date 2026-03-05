@@ -25,6 +25,29 @@ class CliTests(unittest.TestCase):
         self.assertTrue(args.skip_balances)
         self.assertEqual(args.interval, 60)
 
+    def test_parser_accepts_staging_validate_flags(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "staging-validate",
+                "--budget",
+                "1200",
+                "--cadence-seconds",
+                "4",
+                "--min-loops",
+                "3",
+                "--timeout-seconds",
+                "90",
+                "--offline-only",
+            ]
+        )
+        self.assertEqual(args.command, "staging-validate")
+        self.assertEqual(args.budget, 1200.0)
+        self.assertEqual(args.cadence_seconds, 4)
+        self.assertEqual(args.min_loops, 3)
+        self.assertEqual(args.timeout_seconds, 90)
+        self.assertTrue(args.offline_only)
+
 
 if __name__ == "__main__":
     unittest.main()

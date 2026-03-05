@@ -16,6 +16,7 @@ from qtbot.ndax_client import (
     load_credentials_from_env,
 )
 from qtbot.runner import BotRunner, RunnerAlreadyRunningError, is_pid_alive, read_runner_pid
+from qtbot.staging import StagingValidator
 from qtbot.state import StateStore
 from qtbot.universe import resolve_tradable_universe
 
@@ -87,6 +88,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="Fail ndax-check if private balance retrieval cannot be completed.",
     )
 
+    staging_parser = subparsers.add_parser(
+        "staging-validate",
+        help="Run M10 staging validation workflow and emit JSON report.",
+    )
+    staging_parser.add_argument(
+        "--budget",
+        type=positive_float,
+        default=1000.0,
+        help="Budget used for dry-run staging loop startup.",
+    )
+    staging_parser.add_argument(
+        "--cadence-seconds",
+        type=int,
+        default=3,
+        help="Temporary cadence used for staging loop validation.",
+    )
+    staging_parser.add_argument(
+        "--min-loops",
+        type=int,
+        default=2,
+        help="Minimum loop count required before lifecycle drill proceeds.",
+    )
+    staging_parser.add_argument(
+        "--timeout-seconds",
+        type=int,
+        default=120,
+        help="Timeout for live staging drill phases.",
+    )
+    staging_parser.add_argument(
+        "--offline-only",
+        action="store_true",
+        help="Skip live NDAX drills and run only offline/simulated staging checks.",
+    )
+
     return parser
 
 
@@ -132,6 +167,15 @@ def main(argv: list[str] | None = None) -> int:
             to_date=args.to_date,
             skip_balances=args.skip_balances,
             require_balances=args.require_balances,
+        )
+    if command == "staging-validate":
+        return _handle_staging_validate(
+            config=config,
+            budget_cad=args.budget,
+            cadence_seconds=args.cadence_seconds,
+            min_loops=args.min_loops,
+            timeout_seconds=args.timeout_seconds,
+            offline_only=args.offline_only,
         )
 
     print(f"Unknown command: {command}", file=sys.stderr)
@@ -373,6 +417,41 @@ def _handle_ndax_check(
     }
     print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
+
+
+def _handle_staging_validate(
+    *,
+    config: RuntimeConfig,
+    budget_cad: float,
+    cadence_seconds: int,
+    min_loops: int,
+    timeout_seconds: int,
+    offline_only: bool,
+) -> int:
+    if cadence_seconds <= 0:
+        print("--cadence-seconds must be > 0", file=sys.stderr)
+        return 2
+    if min_loops <= 0:
+        print("--min-loops must be > 0", file=sys.stderr)
+        return 2
+    if timeout_seconds <= 0:
+        print("--timeout-seconds must be > 0", file=sys.stderr)
+        return 2
+
+    try:
+        report = StagingValidator(config=config).run(
+            budget_cad=budget_cad,
+            cadence_seconds=cadence_seconds,
+            min_loops=min_loops,
+            timeout_seconds=timeout_seconds,
+            offline_only=offline_only,
+        )
+    except Exception as exc:
+        print(f"Staging validation failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(json.dumps(report.to_payload(), indent=2, sort_keys=True))
+    return 0 if report.passed else 1
 
 
 def _make_ndax_client(config: RuntimeConfig) -> NdaxClient:

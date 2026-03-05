@@ -10,6 +10,7 @@ from unittest import mock
 from qtbot import cli
 from qtbot.control import Command
 from qtbot.ndax_client import NdaxAuthenticationError, NdaxError
+from qtbot.staging import StagingValidationReport, StagingValidationStep
 from qtbot.state import StateStore
 from tests._helpers import make_runtime_config
 
@@ -176,6 +177,35 @@ class CliHandlerTests(unittest.TestCase):
                 result = cli.main(["status"])
                 self.assertEqual(result, 0)
                 status.assert_called_once()
+
+    def test_handle_staging_validate(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = make_runtime_config(Path(td))
+            report = StagingValidationReport(
+                started_at_utc="2026-03-05T00:00:00+00:00",
+                completed_at_utc="2026-03-05T00:00:10+00:00",
+                runtime_dir=cfg.runtime_dir / "staging_validation",
+                report_file=cfg.runtime_dir / "staging_validation" / "logs" / "staging_validation_report.json",
+                steps=[
+                    StagingValidationStep(name="offline_control_plane_drill", passed=True, detail="ok"),
+                ],
+                passed=True,
+                message="staging_validation_passed steps=1",
+            )
+            with mock.patch("qtbot.cli.StagingValidator") as validator_cls:
+                validator_cls.return_value.run.return_value = report
+                code, out, _ = _capture_output(
+                    cli._handle_staging_validate,
+                    config=cfg,
+                    budget_cad=1000.0,
+                    cadence_seconds=3,
+                    min_loops=2,
+                    timeout_seconds=60,
+                    offline_only=True,
+                )
+            self.assertEqual(code, 0)
+            payload = json.loads(out)
+            self.assertTrue(payload["passed"])
 
 
 if __name__ == "__main__":

@@ -387,6 +387,18 @@ Acceptance:
 - compose deployment preserves runtime state/log artifacts across restarts
 - control-plane commands remain operable from another terminal via `docker compose exec`
 
+### M10: Staging Validation
+- add `qtbot staging-validate` control-plane command for operator-run staging checks
+- run continuous dry-run loop in isolated staging runtime against live NDAX public data
+- exercise `pause/resume/stop` lifecycle commands while staging loop is active
+- execute explicit failure scenario checks (for example invalid symbol NDAX checks)
+- verify reconciliation and risk controls under deterministic simulated fault injections
+- persist machine-readable staging report to runtime logs
+Acceptance:
+- staging validation emits structured pass/fail report with per-step evidence
+- lifecycle and failure-path drills are reproducible from CLI
+- reconciliation and risk simulated-fault checks pass before production cutover
+
 ---
 
 ## 11) Defaults Summary (Chosen to Match “Fast Live Evaluation” + “Hours to Days Holding”)
