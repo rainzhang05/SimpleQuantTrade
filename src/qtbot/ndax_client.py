@@ -327,8 +327,11 @@ class NdaxClient:
         )
 
     def authenticate(self, *, credentials: NdaxCredentials) -> None:
-        params = self._build_private_auth_params(credentials)
-        payload = self._api_get("AuthenticateUser", params=params)
+        payload = self._api_get_private(
+            "AuthenticateUser",
+            params={},
+            credentials=credentials,
+        )
         if not isinstance(payload, dict):
             raise NdaxAuthenticationError("NDAX AuthenticateUser returned non-object response.")
         if not payload.get("Authenticated"):
