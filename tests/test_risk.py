@@ -89,6 +89,27 @@ class RiskManagerTests(unittest.TestCase):
             write_control_mock.assert_called_once()
             self.assertTrue(any(event[0] == "RISK_CONSECUTIVE_ERROR_LIMIT_BREACHED" for event in store.events))
 
+    def test_repeated_error_alerts_before_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = make_runtime_config(Path(td), consecutive_error_limit=5)
+            store = _FakeStateStore(consecutive_errors=1)
+            alerter = mock.Mock()
+            manager = RiskManager(
+                config=cfg,
+                state_store=store,  # type: ignore[arg-type]
+                control_file=cfg.control_file,
+                logger=mock.Mock(),
+                alerter=alerter,
+            )
+            action = manager.record_cycle_errors(
+                now_utc=self._now(),
+                error_count=1,
+                reason="cycle_failed",
+            )
+            self.assertFalse(action.triggered)
+            self.assertEqual(action.consecutive_error_count, 2)
+            alerter.send.assert_called_once()
+
     def test_slippage_breach_pauses_immediately(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = make_runtime_config(Path(td), max_slippage_pct=0.02)

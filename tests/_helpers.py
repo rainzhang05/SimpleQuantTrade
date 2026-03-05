@@ -38,6 +38,9 @@ def make_runtime_config(tmp_path: Path, **overrides) -> RuntimeConfig:
         daily_loss_cap_cad=250.0,
         max_slippage_pct=0.02,
         consecutive_error_limit=3,
+        discord_webhook_url=None,
+        discord_timeout_seconds=8.0,
+        discord_max_retries=2,
     )
     if overrides:
         return replace(cfg, **overrides)

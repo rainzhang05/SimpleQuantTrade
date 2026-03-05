@@ -1,7 +1,7 @@
 # SimpleQuantTrade
 A simple fixed-rule quantitative crypto trading system that runs as a command-line bot on NDAX, with live evaluation at the smallest practical cadence.
 
-## Current CLI (M1-M6)
+## Current CLI (M1-M8)
 
 - `qtbot start --budget <CAD>`
 - `qtbot pause`
@@ -41,6 +41,22 @@ Copy `.env.example` to `.env` and fill NDAX credentials before private API check
 - Daily loss cap guard auto-pauses trading when daily realized PnL breaches `QTBOT_DAILY_LOSS_CAP_CAD`.
 - Slippage guard monitors realized fill-vs-signal slippage; breach of `QTBOT_MAX_SLIPPAGE_PCT` halts further orders for the cycle and pauses trading.
 - Consecutive execution/API errors are tracked in persistent state; if the count reaches `QTBOT_CONSECUTIVE_ERROR_LIMIT`, the bot auto-pauses.
+
+## M8 Logging + Discord Alerting
+
+- Runtime append-only logs remain in:
+  - `runtime/logs/qtbot.log`
+  - `runtime/logs/decisions.csv`
+  - `runtime/logs/trades.csv`
+- Optional Discord alerting is enabled by setting `QTBOT_DISCORD_WEBHOOK_URL`.
+- Alert transport tuning:
+  - `QTBOT_DISCORD_TIMEOUT_SECONDS`
+  - `QTBOT_DISCORD_MAX_RETRIES`
+- Alerts are emitted for:
+  - lifecycle `PAUSE`/`STOP` transitions,
+  - repeated API/execution failures,
+  - reconciliation anomalies,
+  - risk-triggered trading halts.
 
 ## Testing and CI
 

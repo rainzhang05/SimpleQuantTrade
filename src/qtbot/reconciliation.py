@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import logging
 from typing import Any
 
+from qtbot.alerts import DiscordAlerter
 from qtbot.config import RuntimeConfig
 from qtbot.ndax_client import (
     NdaxBalance,
@@ -39,11 +40,13 @@ class StartupReconciler:
         ndax_client: NdaxClient,
         state_store: StateStore,
         logger: logging.Logger,
+        alerter: DiscordAlerter | None = None,
     ) -> None:
         self._config = config
         self._ndax_client = ndax_client
         self._state_store = state_store
         self._logger = logger
+        self._alerter = alerter
 
     def reconcile(self) -> ReconciliationSummary:
         credentials = load_credentials_from_env()
@@ -105,6 +108,11 @@ class StartupReconciler:
             event_type="RECONCILIATION_COMPLETED",
             detail=message,
         )
+        if changed_symbols > 0 or capped_bot_cash:
+            self._notify_reconciliation_anomaly(
+                summary="startup reconciliation adjusted local state",
+                detail=message,
+            )
         return ReconciliationSummary(
             account_id=account_id,
             ndax_available_cad=ndax_available_cad,
@@ -132,6 +140,16 @@ class StartupReconciler:
         except NdaxError:
             return None
         return _latest_close(candles)
+
+    def _notify_reconciliation_anomaly(self, *, summary: str, detail: str) -> None:
+        if self._alerter is None:
+            return
+        self._alerter.send(
+            category="RECONCILIATION_ANOMALY",
+            summary=summary,
+            severity="WARNING",
+            detail=detail,
+        )
 
 
 def _latest_close(candles: list[list[Any]]) -> float | None:

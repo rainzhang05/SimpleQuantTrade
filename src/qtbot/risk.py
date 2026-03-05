@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import logging
 from pathlib import Path
 
+from qtbot.alerts import DiscordAlerter
 from qtbot.config import RuntimeConfig
 from qtbot.control import Command, read_control, write_control
 from qtbot.state import StateStore
@@ -16,6 +17,7 @@ from qtbot.state import StateStore
 class RiskAction:
     triggered: bool
     reason: str | None = None
+    consecutive_error_count: int = 0
 
 
 class RiskManager:
@@ -28,11 +30,13 @@ class RiskManager:
         state_store: StateStore,
         control_file: Path,
         logger: logging.Logger,
+        alerter: DiscordAlerter | None = None,
     ) -> None:
         self._config = config
         self._state_store = state_store
         self._control_file = control_file
         self._logger = logger
+        self._alerter = alerter
 
     def enforce_pre_cycle(self, *, now_utc: datetime) -> RiskAction:
         daily_realized_pnl = self._state_store.get_daily_realized_pnl(now_utc=now_utc)
@@ -46,7 +50,7 @@ class RiskManager:
                 reason=reason,
                 event_type="RISK_DAILY_LOSS_CAP_BREACHED",
             )
-            return RiskAction(triggered=True, reason=reason)
+            return RiskAction(triggered=True, reason=reason, consecutive_error_count=0)
         return RiskAction(triggered=False)
 
     def record_cycle_success(self, *, now_utc: datetime, reason: str) -> None:
@@ -81,8 +85,15 @@ class RiskManager:
                 reason=kill_reason,
                 event_type="RISK_CONSECUTIVE_ERROR_LIMIT_BREACHED",
             )
-            return RiskAction(triggered=True, reason=kill_reason)
-        return RiskAction(triggered=False)
+            return RiskAction(triggered=True, reason=kill_reason, consecutive_error_count=consecutive)
+        if consecutive >= 2:
+            self._notify(
+                category="REPEATED_API_FAILURES",
+                summary="repeated execution/api failures detected",
+                severity="WARNING",
+                detail=f"consecutive_error_count={consecutive} reason={reason}",
+            )
+        return RiskAction(triggered=False, consecutive_error_count=consecutive)
 
     def handle_slippage_breach(
         self,
@@ -109,7 +120,7 @@ class RiskManager:
             reason=reason,
             event_type="RISK_SLIPPAGE_GUARD_BREACHED",
         )
-        return RiskAction(triggered=True, reason=reason)
+        return RiskAction(triggered=True, reason=reason, consecutive_error_count=breach_count)
 
     def _pause_trading(self, *, reason: str, event_type: str) -> None:
         if read_control(self._control_file).command != Command.PAUSE:
@@ -130,3 +141,26 @@ class RiskManager:
             event_detail=f"{reason} at={now}",
         )
         self._logger.error("Risk manager paused trading. %s", reason)
+        self._notify(
+            category="RISK_HALT",
+            summary="trading paused by risk manager",
+            severity="ERROR",
+            detail=f"{event_type}: {reason}",
+        )
+
+    def _notify(
+        self,
+        *,
+        category: str,
+        summary: str,
+        severity: str,
+        detail: str,
+    ) -> None:
+        if self._alerter is None:
+            return
+        self._alerter.send(
+            category=category,
+            summary=summary,
+            severity=severity,
+            detail=detail,
+        )

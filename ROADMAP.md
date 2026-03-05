@@ -256,6 +256,7 @@ Write logs into `runtime/logs/`:
 - control state changes
 - errors/retries
 - reconciliation notes
+- risk/preflight state transitions
 
 2) `trades.csv`
 Columns (minimum):
@@ -278,6 +279,12 @@ Columns (minimum):
 - atr
 - signal (ENTER / EXIT / HOLD)
 - reason
+
+4) Optional Discord alerts (webhook-driven)
+- lifecycle `PAUSE` / `STOP` transitions
+- repeated API/execution failures
+- reconciliation anomalies
+- risk-triggered halts
 
 ---
 
@@ -305,6 +312,7 @@ Suggested components:
 - `ledger` (PnL + fee accounting)
 - `universe` (symbols + CAD pairs + exclusions)
 - `logging`
+- `alerts` (Discord operational notifications)
 
 ---
 
@@ -357,6 +365,19 @@ Acceptance:
 - failed preflight blocks live order path with explicit failed checks
 - successful preflight is required before live execution can run
 
+### M7: Risk Hardening
+- enforce daily loss cap with auto-pause
+- enforce slippage guard with auto-pause
+- enforce consecutive error kill-switch
+Acceptance:
+- risk constraints consistently block unsafe live execution paths
+
+### M8: Logging + Discord Alerting
+- keep append-only runtime logs for loop/decisions/trades
+- send Discord alerts for lifecycle, failure, reconciliation, and risk-halt events
+Acceptance:
+- operator receives actionable operational alerts without blocking trading process safety paths
+
 ---
 
 ## 11) Defaults Summary (Chosen to Match “Fast Live Evaluation” + “Hours to Days Holding”)
@@ -374,6 +395,9 @@ Acceptance:
 - Daily loss cap: **250 CAD**
 - Max slippage guard: **2%**
 - Consecutive error kill-switch limit: **3**
+- Discord alert timeout: **8s**
+- Discord alert retries: **2**
+- Discord webhook URL: unset by default (alerts disabled unless configured)
 
 All defaults should be placed in a single config module/file.
 

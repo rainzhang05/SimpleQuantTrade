@@ -299,6 +299,29 @@ M7 validation evidence:
 Exit criteria:
 - Operator can diagnose critical issues from logs + alerts.
 
+M8 implementation status:
+- [x] Added Discord alert transport module (`DiscordAlerter`) with retry/backoff and non-blocking failure handling.
+- [x] Added Discord runtime config:
+  - `QTBOT_DISCORD_WEBHOOK_URL`
+  - `QTBOT_DISCORD_TIMEOUT_SECONDS`
+  - `QTBOT_DISCORD_MAX_RETRIES`
+- [x] Integrated lifecycle alerts from runner for `PAUSE` and `STOP` transitions.
+- [x] Integrated repeated-failure alerts for recurring NDAX/execution cycle failures.
+- [x] Integrated reconciliation anomaly alerts when startup reconciliation mutates state/cash.
+- [x] Integrated risk-halt alerts from `RiskManager` for slippage, daily-loss, and kill-switch pauses.
+- [x] Kept runtime logs append-only and preserved decision/trade logging behavior.
+
+M8 validation evidence:
+- Compile check: `python3 -m compileall src` passed after M8 changes.
+- Unit/integration suite: `PYTHONPATH=src python3 -m unittest discover -s tests -p "test_*.py"` passed (`89` tests).
+- Coverage gate: `PYTHONPATH=src coverage run --source=src/qtbot -m unittest discover -s tests -p "test_*.py"` and `coverage report --show-missing --fail-under=85` passed at `86%`.
+- Live-mode smoke run (alerts configured but no webhook required): `QTBOT_RUNTIME_DIR=runtime_m8_check QTBOT_CADENCE_SECONDS=2 QTBOT_ENABLE_LIVE_TRADING=true QTBOT_MIN_ORDER_NOTIONAL_CAD=1000000000 QTBOT_PREFLIGHT_MIN_WARMUP_COVERAGE=0.8 PYTHONPATH=src python3 -m qtbot start --budget 1000` started and stopped cleanly without runtime errors.
+- New M8 tests added:
+  - `tests/test_alerts.py` validates Discord alert delivery/retry/error handling.
+  - `tests/test_reconciliation.py` validates anomaly alert emission on reconciliation changes.
+  - `tests/test_risk.py` validates repeated-failure alert emission and risk pause behavior.
+  - `tests/test_runner_loop.py` validates lifecycle alert path on stop transition.
+
 ### M9: Docker Production Packaging
 - Build Python 3.11 Docker image.
 - Add `docker-compose` runtime with persistent volume for `runtime/`.
@@ -461,6 +484,9 @@ Defaults:
 - Daily loss cap (`QTBOT_DAILY_LOSS_CAP_CAD`): `250`.
 - Max slippage guard (`QTBOT_MAX_SLIPPAGE_PCT`): `0.02`.
 - Consecutive error kill-switch limit (`QTBOT_CONSECUTIVE_ERROR_LIMIT`): `3`.
+- Discord alert timeout (`QTBOT_DISCORD_TIMEOUT_SECONDS`): `8`.
+- Discord alert retries (`QTBOT_DISCORD_MAX_RETRIES`): `2`.
+- Discord webhook (`QTBOT_DISCORD_WEBHOOK_URL`): unset by default (alerts disabled until configured).
 
 Documentation policy:
 - NDAX naming remains canonical in all docs.

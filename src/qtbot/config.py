@@ -45,6 +45,9 @@ class RuntimeConfig:
     daily_loss_cap_cad: float
     max_slippage_pct: float
     consecutive_error_limit: int
+    discord_webhook_url: str | None
+    discord_timeout_seconds: float
+    discord_max_retries: int
 
 
 def load_runtime_config() -> RuntimeConfig:
@@ -125,6 +128,17 @@ def load_runtime_config() -> RuntimeConfig:
     if consecutive_error_limit <= 0:
         raise ValueError("QTBOT_CONSECUTIVE_ERROR_LIMIT must be > 0.")
 
+    discord_webhook_url_raw = os.getenv("QTBOT_DISCORD_WEBHOOK_URL", "").strip()
+    discord_webhook_url = discord_webhook_url_raw or None
+
+    discord_timeout_seconds = float(os.getenv("QTBOT_DISCORD_TIMEOUT_SECONDS", "8"))
+    if discord_timeout_seconds <= 0:
+        raise ValueError("QTBOT_DISCORD_TIMEOUT_SECONDS must be > 0.")
+
+    discord_max_retries = int(os.getenv("QTBOT_DISCORD_MAX_RETRIES", "2"))
+    if discord_max_retries < 0:
+        raise ValueError("QTBOT_DISCORD_MAX_RETRIES must be >= 0.")
+
     runtime_dir = _resolve_runtime_dir(os.getenv("QTBOT_RUNTIME_DIR", "runtime"))
     return RuntimeConfig(
         cadence_seconds=cadence_seconds,
@@ -154,6 +168,9 @@ def load_runtime_config() -> RuntimeConfig:
         daily_loss_cap_cad=daily_loss_cap_cad,
         max_slippage_pct=max_slippage_pct,
         consecutive_error_limit=consecutive_error_limit,
+        discord_webhook_url=discord_webhook_url,
+        discord_timeout_seconds=discord_timeout_seconds,
+        discord_max_retries=discord_max_retries,
     )
 
 

@@ -139,11 +139,13 @@ class NdaxClientMoreTests(unittest.TestCase):
         ), mock.patch.object(self.client, "_sleep_backoff"):
             payload = self.client._request("GET", "X", params={}, headers=None, json_body=None)
             self.assertEqual(payload["ok"], True)
+        http_500.close()
 
         http_404 = HTTPError("u", 404, "err", None, io.BytesIO(b"missing"))
         with mock.patch("qtbot.ndax_client.request.urlopen", side_effect=http_404):
             with self.assertRaises(NdaxAuthenticationError):
                 self.client._request("GET", "X", params={}, headers={"APIKey": "k"}, json_body=None)
+        http_404.close()
 
         with mock.patch("qtbot.ndax_client.request.urlopen", return_value=_Response("not-json")):
             with self.assertRaises(NdaxError):

@@ -71,11 +71,13 @@ class ReconciliationTests(unittest.TestCase):
                     NdaxBalance(product_symbol="DOGE", amount=0.0, hold=0.0),
                 ],
             )
+            alerter = mock.Mock()
             reconciler = StartupReconciler(
                 config=cfg,
                 ndax_client=client,
                 state_store=store,
                 logger=self._logger(),
+                alerter=alerter,
             )
 
             with mock.patch("qtbot.reconciliation.load_credentials_from_env", return_value=mock.Mock()):
@@ -90,6 +92,7 @@ class ReconciliationTests(unittest.TestCase):
             positions = store.get_positions()
             self.assertEqual(positions["SOL"].qty, 2.0)
             self.assertEqual(positions["DOGE"].qty, 0.0)
+            alerter.send.assert_called_once()
 
     def test_reconcile_uses_reference_price_for_new_position(self) -> None:
         with tempfile.TemporaryDirectory() as td:

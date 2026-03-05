@@ -40,6 +40,9 @@ class RuntimeConfigTests(unittest.TestCase):
                         "QTBOT_DAILY_LOSS_CAP_CAD=300",
                         "QTBOT_MAX_SLIPPAGE_PCT=0.03",
                         "QTBOT_CONSECUTIVE_ERROR_LIMIT=4",
+                        "QTBOT_DISCORD_WEBHOOK_URL=https://discord.example/webhook",
+                        "QTBOT_DISCORD_TIMEOUT_SECONDS=9",
+                        "QTBOT_DISCORD_MAX_RETRIES=5",
                     ]
                 ),
                 encoding="utf-8",
@@ -58,6 +61,9 @@ class RuntimeConfigTests(unittest.TestCase):
             self.assertEqual(cfg.daily_loss_cap_cad, 300.0)
             self.assertEqual(cfg.max_slippage_pct, 0.03)
             self.assertEqual(cfg.consecutive_error_limit, 4)
+            self.assertEqual(cfg.discord_webhook_url, "https://discord.example/webhook")
+            self.assertEqual(cfg.discord_timeout_seconds, 9.0)
+            self.assertEqual(cfg.discord_max_retries, 5)
             self.assertEqual(cfg.runtime_dir, (root / "test_runtime").resolve())
 
     def test_invalid_bool_raises_value_error(self) -> None:
@@ -89,6 +95,17 @@ class RuntimeConfigTests(unittest.TestCase):
             root = Path(td)
             (root / ".env").write_text(
                 "QTBOT_DAILY_LOSS_CAP_CAD=0\nQTBOT_MAX_SLIPPAGE_PCT=1\nQTBOT_CONSECUTIVE_ERROR_LIMIT=0\n",
+                encoding="utf-8",
+            )
+            with pushd(root), mock.patch.dict(os.environ, {}, clear=True):
+                with self.assertRaises(ValueError):
+                    load_runtime_config()
+
+    def test_invalid_discord_values_raise(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / ".env").write_text(
+                "QTBOT_DISCORD_TIMEOUT_SECONDS=0\nQTBOT_DISCORD_MAX_RETRIES=-1\n",
                 encoding="utf-8",
             )
             with pushd(root), mock.patch.dict(os.environ, {}, clear=True):

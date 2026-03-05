@@ -10,6 +10,7 @@ from pathlib import Path
 import signal
 import time
 
+from qtbot.alerts import DiscordAlerter
 from qtbot.config import RuntimeConfig
 from qtbot.control import Command, read_control, write_control
 from qtbot.decision_log import DecisionCsvLogger
@@ -100,6 +101,12 @@ class BotRunner:
             logger = configure_logging(self._config.log_file)
             state_store = StateStore(self._config.state_db)
             state_store.initialize(initial_budget_cad=self._budget_cad)
+            alerter = DiscordAlerter(
+                webhook_url=self._config.discord_webhook_url,
+                timeout_seconds=self._config.discord_timeout_seconds,
+                max_retries=self._config.discord_max_retries,
+                logger=logger,
+            )
             ndax_client = NdaxClient(
                 base_url=self._config.ndax_base_url,
                 oms_id=self._config.ndax_oms_id,
@@ -126,12 +133,14 @@ class BotRunner:
                 state_store=state_store,
                 control_file=self._config.control_file,
                 logger=logger,
+                alerter=alerter,
             )
             reconciler = StartupReconciler(
                 config=self._config,
                 ndax_client=ndax_client,
                 state_store=state_store,
                 logger=logger,
+                alerter=alerter,
             )
 
             state_store.set_status(
@@ -154,6 +163,12 @@ class BotRunner:
                     logger.error(
                         "Startup reconciliation failed in live mode. Blocking bot start: %s",
                         exc,
+                    )
+                    alerter.send(
+                        category="RECONCILIATION_FAILURE",
+                        summary="startup reconciliation failed in live mode",
+                        severity="ERROR",
+                        detail=event_detail,
                     )
                     raise
                 logger.warning(
@@ -189,6 +204,12 @@ class BotRunner:
                     logger.error(
                         "Go-live preflight failed in live mode. Blocking bot start: %s",
                         preflight_summary.message,
+                    )
+                    alerter.send(
+                        category="PREFLIGHT_FAILURE",
+                        summary="go-live preflight failed",
+                        severity="ERROR",
+                        detail=event_detail,
                     )
                     raise NdaxError(preflight_summary.message)
                 logger.info("Go-live preflight completed. %s", preflight_summary.message)
@@ -229,6 +250,12 @@ class BotRunner:
                         event_detail="stop transition",
                     )
                     logger.info("Stop requested. Exiting gracefully.")
+                    alerter.send(
+                        category="LIFECYCLE",
+                        summary="bot stop transition",
+                        severity="WARNING",
+                        detail="Control command STOP received; runner exiting gracefully.",
+                    )
                     break
 
                 if command == Command.PAUSE:
@@ -240,6 +267,12 @@ class BotRunner:
                             event_detail="pause transition",
                         )
                         logger.info("Pause requested. Trading loop suspended.")
+                        alerter.send(
+                            category="LIFECYCLE",
+                            summary="bot pause transition",
+                            severity="WARNING",
+                            detail="Control command PAUSE received; trading loop suspended.",
+                        )
                     time.sleep(1.0)
                     continue
 
