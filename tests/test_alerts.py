@@ -50,6 +50,8 @@ class AlertsTests(unittest.TestCase):
         self.assertTrue(result.delivered)
         self.assertEqual(result.reason, "ok")
         m.assert_called_once()
+        sent_request = m.call_args.args[0]
+        self.assertEqual(sent_request.get_header("User-agent"), "SimpleQuantTrade/0.1")
 
     def test_send_retries_on_network_error(self) -> None:
         alerter = DiscordAlerter(

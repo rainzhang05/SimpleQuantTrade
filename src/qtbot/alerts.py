@@ -8,6 +8,8 @@ import logging
 import time
 from urllib import error, request
 
+DEFAULT_ALERT_USER_AGENT = "SimpleQuantTrade/0.1"
+
 
 @dataclass(frozen=True)
 class AlertResult:
@@ -54,7 +56,11 @@ class DiscordAlerter:
         )
         payload = {"content": content}
         payload_bytes = json.dumps(payload).encode("utf-8")
-        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": DEFAULT_ALERT_USER_AGENT,
+        }
 
         for attempt in range(self._max_retries + 1):
             try:
