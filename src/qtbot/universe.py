@@ -28,8 +28,6 @@ TOP_20_MARKET_COINS: tuple[str, ...] = (
     "HBAR",
 )
 
-LOCKED_COINS: frozenset[str] = frozenset({"BTC", "ETH"})
-
 
 @dataclass(frozen=True)
 class UniverseEntry:
@@ -45,7 +43,7 @@ class UniverseResolution:
 
 
 def resolve_tradable_universe(instruments: list[dict[str, object]]) -> UniverseResolution:
-    """Resolve top-20-minus-locked universe against live NDAX CAD instruments."""
+    """Resolve hardcoded top-20 universe against live NDAX CAD instruments."""
     cad_by_ticker: dict[str, UniverseEntry] = {}
     for instrument in instruments:
         base_symbol = str(instrument.get("Product1Symbol", "")).upper()
@@ -63,9 +61,6 @@ def resolve_tradable_universe(instruments: list[dict[str, object]]) -> UniverseR
     tradable: list[UniverseEntry] = []
     skipped: dict[str, str] = {}
     for ticker in TOP_20_MARKET_COINS:
-        if ticker in LOCKED_COINS:
-            skipped[ticker] = "locked"
-            continue
         entry = cad_by_ticker.get(ticker)
         if entry is None:
             skipped[ticker] = "no_ndax_cad_pair"

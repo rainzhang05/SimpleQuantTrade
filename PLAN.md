@@ -13,8 +13,7 @@ Hard constraints:
   - `NDAX_USERNAME` (optional)
 - Spot-only, no margin/leverage/borrowing/shorting.
 - CAD budget virtual sub-account model (`--budget`-based internal cash ledger).
-- BTC/ETH are permanently locked (no buy/sell, excluded from logic).
-- Tradable universe = hardcoded top 20 list minus BTC/ETH, and only symbols with NDAX CAD spot markets.
+- Tradable universe = hardcoded top 20 list, and only symbols with NDAX CAD spot markets.
 - Live 60-second evaluation cadence, 1-minute signal timeframe.
 - Graceful control lifecycle from another terminal: `start`, `pause`, `resume`, `stop`, `status`.
 - Deterministic strategy and fee-aware accounting (0.4% per side).
@@ -34,7 +33,7 @@ Target module boundaries:
 - `ndax_client`:
   - auth/signing, balances, market metadata, OHLC candles, order endpoints, order status/fills.
 - `universe`:
-  - hardcoded top-20 list, BTC/ETH exclusion, NDAX CAD market validation.
+  - hardcoded top-20 list and NDAX CAD market validation.
 - `strategy`:
   - EMA/ATR calculations, deterministic signal generation.
 - `execution`:
@@ -125,7 +124,7 @@ M2 implementation status:
 - [x] NDAX client wrapper implemented with retry/backoff and signed private request headers.
 - [x] Public market metadata implemented via `GetInstruments`.
 - [x] 1-minute candle retrieval implemented via `GetTickerHistory` (`Interval=60`).
-- [x] Top-20-minus-locked CAD universe validation implemented against live NDAX instruments.
+- [x] Top-20 CAD universe validation implemented against live NDAX instruments.
 - [x] Authenticated balance flow implemented via `GetUserAccounts` + `GetAccountPositions`.
 - [x] CLI integration commands added: `ndax-pairs`, `ndax-candles`, `ndax-balances`, `ndax-check`.
 
@@ -169,7 +168,7 @@ M3 validation evidence:
 
 Exit criteria:
 - Filled orders reconcile with ledger updates.
-- Budget and lock constraints remain enforced.
+- Budget and execution safety constraints remain enforced.
 
 M4 implementation status:
 - [x] NDAX client extended with private order endpoints (`SendOrder`, `GetOrderStatus`) and fill polling.
@@ -501,10 +500,6 @@ Reconciliation flow:
 ## 6) Risk Controls and Observability
 
 Risk controls (production baseline):
-- BTC/ETH hard lock enforced in:
-  - universe filtering,
-  - signal generation,
-  - execution preflight checks.
 - Budget enforcement:
   - no order may exceed internal `bot_cash_cad`.
   - no order may exceed available exchange CAD:
@@ -539,7 +534,7 @@ Integration tests:
 
 Acceptance gates:
 - M0-M11 exit criteria all passed.
-- No prohibited asset trade path exists.
+- No unintended asset exclusions or unsafe trade paths exist.
 - Restart/pause/stop cannot corrupt state.
 - Decisions and trades are fully traceable in logs.
 - Every phase change must include or update automated tests for new/modified behavior.

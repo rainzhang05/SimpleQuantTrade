@@ -21,7 +21,7 @@ This runbook defines the required operational checklist for NDAX production laun
    - `PYTHONPATH=src python3 -m qtbot status`
 3. Monitor first cycles:
    - decisions are appended to `runtime/logs/decisions.csv`
-   - no BTC/ETH activity appears in decisions/trades
+   - traded symbols align with expected strategy signals and configured universe
 4. If running in Docker:
    - `docker compose up -d qtbot`
    - `docker compose exec qtbot qtbot status`

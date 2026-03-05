@@ -29,15 +29,9 @@ The agent may modify project structure/files as needed, but MUST preserve all co
 - The bot may reuse profits (i.e., if bot grows, it can deploy more than the initial CAD later).  
   Implementation: bot is capped only by its own internal cash + proceeds, not by the original amount.
 
-### Locked assets
-- **BTC and ETH are locked**:
-  - Bot MUST NOT buy BTC/ETH.
-  - Bot MUST NOT sell BTC/ETH.
-  - Bot MUST ignore BTC/ETH in decisions and must not use BTC/ETH balances.
-
 ### Tradable universe
-- Only trade the hardcoded “top 20 market coins” list in code.
-- Exclude BTC and ETH → effectively **18 tradable coins**.
+- Only trade the hardcoded “top 20 market coins” list in code (includes BTC and ETH).
+- All symbols in the configured top-20 list are eligible when NDAX CAD spot pairs are available.
 - Only trade coins that have a **CAD spot pair** on NDAX.
 - If a configured coin has no CAD pair on NDAX, skip and log.
 
@@ -126,11 +120,10 @@ Long-only spot strategy using:
 ### Entry (buy) conditions for a coin
 Enter long if ALL are true:
 1) Coin is in allowed universe and has CAD pair
-2) Not BTC/ETH
-3) Not currently holding that coin (qty == 0)
-4) Trend up: `EMA_fast > EMA_slow`
-5) Pullback: `close <= EMA_fast` (price at/below fast EMA)
-6) Cooldown satisfied (no exit from this coin within last `COOLDOWN_MINUTES`, default 30)
+2) Not currently holding that coin (qty == 0)
+3) Trend up: `EMA_fast > EMA_slow`
+4) Pullback: `close <= EMA_fast` (price at/below fast EMA)
+5) Cooldown satisfied (no exit from this coin within last `COOLDOWN_MINUTES`, default 30)
 
 ### Exit (sell) conditions
 Exit if ANY are true:
@@ -288,15 +281,14 @@ Columns (minimum):
 
 ---
 
-## 8) Universe Definition (Hardcoded Top 20 Minus BTC/ETH)
+## 8) Universe Definition (Hardcoded Top 20, CAD-Validated)
 
 The agent must:
 - Provide a hardcoded list of 20 tickers in config (includes BTC, ETH).
-- Filter out BTC/ETH.
 - Map tickers to NDAX market/pair symbols.
 - Validate CAD pair existence at startup:
   - if missing, skip coin
-- Always exclude BTC and ETH regardless of exchange symbol aliasing.
+- Do not apply BTC/ETH-specific exclusions.
 
 ---
 
@@ -310,7 +302,7 @@ Suggested components:
 - `execution` (orders + fill confirmation)
 - `state` (persistence + reconciliation)
 - `ledger` (PnL + fee accounting)
-- `universe` (symbols + CAD pairs + exclusions)
+- `universe` (symbols + CAD pair validation)
 - `logging`
 - `alerts` (Discord operational notifications)
 
@@ -353,7 +345,7 @@ Acceptance:
 - robust retries/backoff
 - reconciliation on restart
 - duplicate prevention
-- enforce BTC/ETH lock everywhere
+- enforce budget/risk constraints consistently
 Acceptance:
 - bot can survive transient API failures and can resume after pause/stop without losing state
 

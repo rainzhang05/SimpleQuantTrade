@@ -172,7 +172,7 @@ class GoLivePreflight:
                 passed=True,
                 detail=(
                     f"tradable={tradable_count} skipped={len(resolution.skipped)} "
-                    f"(locked/no_pair entries included)."
+                    f"(missing-pair entries included)."
                 ),
             ),
             tradable=resolution.tradable,

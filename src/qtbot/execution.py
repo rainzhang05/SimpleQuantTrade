@@ -20,7 +20,7 @@ from qtbot.ndax_client import (
 from qtbot.state import StateStore
 from qtbot.strategy.signals import Decision, PositionSnapshot, empty_position
 from qtbot.trade_log import TradeCsvLogger, TradeFillRecord
-from qtbot.universe import LOCKED_COINS, UniverseEntry
+from qtbot.universe import UniverseEntry
 
 
 @dataclass(frozen=True)
@@ -105,9 +105,6 @@ class LiveExecutionEngine:
 
             entry = pair_to_entry.get(decision.symbol)
             if entry is None:
-                skipped += 1
-                continue
-            if entry.ticker in LOCKED_COINS:
                 skipped += 1
                 continue
 
@@ -196,9 +193,6 @@ class LiveExecutionEngine:
 
             entry = pair_to_entry.get(decision.symbol)
             if entry is None:
-                skipped += 1
-                continue
-            if entry.ticker in LOCKED_COINS:
                 skipped += 1
                 continue
 

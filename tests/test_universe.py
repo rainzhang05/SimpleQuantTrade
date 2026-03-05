@@ -6,7 +6,7 @@ from qtbot.universe import resolve_tradable_universe
 
 
 class UniverseTests(unittest.TestCase):
-    def test_resolve_tradable_universe_filters_locked_and_missing_pairs(self) -> None:
+    def test_resolve_tradable_universe_includes_btc_eth_when_pairs_exist(self) -> None:
         instruments = [
             {"Product1Symbol": "BTC", "Product2Symbol": "CAD", "Symbol": "BTCCAD", "InstrumentId": 1},
             {"Product1Symbol": "ETH", "Product2Symbol": "CAD", "Symbol": "ETHCAD", "InstrumentId": 2},
@@ -20,10 +20,8 @@ class UniverseTests(unittest.TestCase):
 
         self.assertIn("SOLCAD", tradable_symbols)
         self.assertIn("DOGECAD", tradable_symbols)
-        self.assertNotIn("BTCCAD", tradable_symbols)
-        self.assertNotIn("ETHCAD", tradable_symbols)
-        self.assertEqual(resolution.skipped["BTC"], "locked")
-        self.assertEqual(resolution.skipped["ETH"], "locked")
+        self.assertIn("BTCCAD", tradable_symbols)
+        self.assertIn("ETHCAD", tradable_symbols)
         self.assertEqual(resolution.skipped["ADA"], "no_ndax_cad_pair")
 
 

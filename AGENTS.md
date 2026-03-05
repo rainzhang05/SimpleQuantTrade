@@ -115,8 +115,6 @@ Trading decisions must be reproducible and understandable.
 ### Safety
 The system must never:
 
-- trade BTC
-- trade ETH
 - borrow funds
 - exceed the allowed CAD budget
 

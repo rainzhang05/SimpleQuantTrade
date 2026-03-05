@@ -475,7 +475,7 @@ def _manual_verification_checklist() -> list[str]:
         "Confirm first live ENTER/EXIT fills appear in runtime/logs/trades.csv with expected fees.",
         "Confirm runtime/state.sqlite totals (bot_cash_cad, realized_pnl_cad, fees_paid_cad) are consistent with fills.",
         "Confirm Discord receives lifecycle and risk/reconciliation alerts (or manual operator alert path is active).",
-        "Confirm no BTC/ETH orders appear in decisions or trades during initial live cycles.",
+        "Confirm initial live cycles match expected strategy decisions and risk constraints.",
     ]
 
 

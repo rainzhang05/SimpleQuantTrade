@@ -194,6 +194,67 @@ class ExecutionEngineTests(unittest.TestCase):
             self.assertEqual(len(state_store.sell_calls), 1)
             self.assertEqual(state_store.sell_calls[0]["symbol"], "SOL")
 
+    def test_live_mode_allows_btc_and_eth_symbols(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = make_runtime_config(
+                Path(td),
+                enable_live_trading=True,
+                min_order_notional_cad=10.0,
+            )
+            write_control(cfg.control_file, Command.RUN, updated_by="test", reason="run")
+            state_store = _FakeStateStore(500.0, {}, [], [])
+            client = _FakeNdaxClient([NdaxBalance("CAD", 500.0, 0.0)])
+            client.next_fill_qty = 0.1
+            client.next_fill_price = 1000.0
+            engine = LiveExecutionEngine(
+                config=cfg,
+                ndax_client=client,
+                state_store=state_store,
+                trade_logger=TradeCsvLogger(cfg.runtime_dir / "logs" / "trades.csv"),
+                logger=self._logger(),
+            )
+            decisions = [
+                Decision(
+                    timestamp_utc="2026-03-05T00:00:00+00:00",
+                    symbol="BTCCAD",
+                    close=100000.0,
+                    ema_fast=100100.0,
+                    ema_slow=99900.0,
+                    atr=500.0,
+                    signal="ENTER",
+                    reason="entry_conditions_met",
+                    score=0.01,
+                ),
+                Decision(
+                    timestamp_utc="2026-03-05T00:00:00+00:00",
+                    symbol="ETHCAD",
+                    close=3000.0,
+                    ema_fast=3010.0,
+                    ema_slow=2990.0,
+                    atr=25.0,
+                    signal="ENTER",
+                    reason="entry_conditions_met",
+                    score=0.009,
+                ),
+            ]
+            tradable = [
+                UniverseEntry(ticker="BTC", ndax_symbol="BTCCAD", instrument_id=1),
+                UniverseEntry(ticker="ETH", ndax_symbol="ETHCAD", instrument_id=2),
+            ]
+
+            with mock.patch("qtbot.execution.load_credentials_from_env", return_value=mock.Mock()):
+                summary = engine.execute_decisions(
+                    now_utc=datetime.now(timezone.utc),
+                    decisions=decisions,
+                    tradable=tradable,
+                )
+
+            self.assertEqual(summary.enter_filled, 2)
+            self.assertEqual(len(client.send_calls), 2)
+            submitted_symbols = {call["instrument_id"] for call in client.send_calls}
+            self.assertIn(1, submitted_symbols)
+            self.assertIn(2, submitted_symbols)
+
     def test_live_mode_slippage_breach_stops_further_orders(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = make_runtime_config(
