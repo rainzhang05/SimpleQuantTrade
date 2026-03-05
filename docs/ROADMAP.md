@@ -37,8 +37,8 @@ The agent may modify project structure/files as needed, but MUST preserve all co
 
 ### Fees (must be applied)
 - Assume taker fees:
-  - **0.4% per side**
-  - **0.8% round-trip**
+  - **0.2% per side**
+  - **0.4% round-trip**
 - Fee must be deducted from PnL and tracked.
 
 ### Live-only
@@ -170,8 +170,8 @@ Persist:
 
 ### Fee handling (assumed)
 For each filled trade:
-- Buy fee: `fee = 0.004 * notional_cad`
-- Sell fee: `fee = 0.004 * notional_cad`
+- Buy fee: `fee = 0.002 * notional_cad`
+- Sell fee: `fee = 0.002 * notional_cad`
 
 Accounting:
 - Buy:
@@ -414,7 +414,7 @@ Acceptance:
 - Time stop: **48 hours**
 - Cooldown after exit: **30 minutes**
 - Max new entries per cycle: **3** (operational burst control; not a portfolio limit)
-- Fee: **0.4% per side**
+- Fee: **0.2% per side**
 - Go-live preflight warmup coverage threshold: **0.8**
 - Daily loss cap: **250 CAD**
 - Max slippage guard: **2%**

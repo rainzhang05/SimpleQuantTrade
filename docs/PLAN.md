@@ -16,7 +16,7 @@ Hard constraints:
 - Tradable universe = hardcoded top 20 list, and only symbols with NDAX CAD spot markets.
 - Live 60-second evaluation cadence, 1-minute signal timeframe.
 - Graceful control lifecycle from another terminal: `start`, `pause`, `resume`, `stop`, `status`.
-- Deterministic strategy and fee-aware accounting (0.4% per side).
+- Deterministic strategy and fee-aware accounting (0.2% per side).
 - Atomic persistence and safe restart reconciliation with NDAX as source of truth.
 
 ## 2) Architecture / Modules (NDAX-Oriented)
@@ -581,7 +581,7 @@ Defaults:
 - Max hold duration: 48 hours.
 - Cooldown after exit: 30 minutes.
 - Max new entries per cycle: 3.
-- Fee model: 0.4% per side.
+- Fee model: 0.2% per side.
 - State store: `runtime/state.sqlite`.
 - Go-live warmup coverage threshold: `0.8`.
 - Daily loss cap (`QTBOT_DAILY_LOSS_CAP_CAD`): `250`.

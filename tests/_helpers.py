@@ -30,7 +30,7 @@ def make_runtime_config(tmp_path: Path, **overrides) -> RuntimeConfig:
         cooldown_minutes=30,
         max_new_entries_per_cycle=3,
         enable_live_trading=False,
-        taker_fee_rate=0.004,
+        taker_fee_rate=0.002,
         min_order_notional_cad=25.0,
         order_status_poll_seconds=0.01,
         order_status_max_attempts=3,

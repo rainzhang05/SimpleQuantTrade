@@ -96,7 +96,7 @@ def load_runtime_config() -> RuntimeConfig:
 
     enable_live_trading = _parse_bool(os.getenv("QTBOT_ENABLE_LIVE_TRADING", "false"))
 
-    taker_fee_rate = float(os.getenv("QTBOT_TAKER_FEE_RATE", "0.004"))
+    taker_fee_rate = float(os.getenv("QTBOT_TAKER_FEE_RATE", "0.002"))
     if taker_fee_rate < 0:
         raise ValueError("QTBOT_TAKER_FEE_RATE must be >= 0.")
 
