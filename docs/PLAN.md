@@ -57,7 +57,7 @@ Target module boundaries:
 
 ### M0: Docs and Spec Alignment
 - Update all docs to NDAX naming/credentials.
-- Create and maintain this `PLAN.md`.
+- Create and maintain `docs/PLAN.md`.
 - Confirm docs are consistent (`README`, `ROADMAP`, `AGENTS`, `PLAN`).
 
 Exit criteria:
@@ -66,14 +66,14 @@ Exit criteria:
 
 M0 implementation status:
 - [x] `README.md` updated to NDAX.
-- [x] `ROADMAP.md` updated to NDAX terms, credentials, client naming, and balance variable naming.
+- [x] `docs/ROADMAP.md` updated to NDAX terms, credentials, client naming, and balance variable naming.
 - [x] `AGENTS.md` updated to NDAX API behavior wording.
-- [x] `PLAN.md` created and aligned with NDAX-first implementation phases.
+- [x] `docs/PLAN.md` created and aligned with NDAX-first implementation phases.
 - [x] Cross-doc consistency checks executed and passed.
 
 M0 validation commands:
-- `rg -n "<legacy_exchange_terms>" README.md ROADMAP.md AGENTS.md PLAN.md` -> no matches.
-- `rg -n "NDAX_API_KEY|NDAX_API_SECRET|ndax_available_cad|ndax_client" README.md ROADMAP.md AGENTS.md PLAN.md` -> expected NDAX contract matches present.
+- `rg -n "<legacy_exchange_terms>" README.md docs/ROADMAP.md AGENTS.md docs/PLAN.md` -> no matches.
+- `rg -n "NDAX_API_KEY|NDAX_API_SECRET|ndax_available_cad|ndax_client" README.md docs/ROADMAP.md AGENTS.md docs/PLAN.md` -> expected NDAX contract matches present.
 
 ### M1: CLI, Control Plane, and Persistence Skeleton
 - Implement CLI commands:
@@ -438,7 +438,7 @@ M11 implementation status:
   - stdout JSON summary
   - `runtime/production_cutover/logs/production_cutover_report.json`.
 - [x] Added production operations artifact:
-  - new `PRODUCTION_RUNBOOK.md` with launch, first-trade verification, rollback, and incident response playbooks.
+  - new `docs/PRODUCTION_RUNBOOK.md` with launch, first-trade verification, rollback, and incident response playbooks.
 - [x] Added/updated M11 tests:
   - new `tests/test_cutover.py`
   - updates in `tests/test_cli.py` and `tests/test_cli_handlers.py`.

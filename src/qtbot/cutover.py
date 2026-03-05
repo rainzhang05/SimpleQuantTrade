@@ -255,7 +255,7 @@ class ProductionCutoverChecklist:
         )
 
     def _check_runbook_presence(self) -> CutoverCheckResult:
-        runbook_path = self._working_dir / "PRODUCTION_RUNBOOK.md"
+        runbook_path = self._working_dir / "docs" / "PRODUCTION_RUNBOOK.md"
         if not runbook_path.exists():
             return CutoverCheckResult(
                 name="production_runbook_presence",

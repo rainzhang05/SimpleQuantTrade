@@ -50,7 +50,8 @@ def _write_staging_report(
 
 
 def _write_runbook(root: Path, *, valid: bool = True) -> None:
-    path = root / "PRODUCTION_RUNBOOK.md"
+    path = root / "docs" / "PRODUCTION_RUNBOOK.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
     if valid:
         content = (
             "# Production Runbook\n\n"

@@ -394,7 +394,7 @@ Acceptance:
 ### M11: Production Cutover Checklist
 - add `qtbot cutover-checklist` command to execute production-readiness gates
 - require recent successful staging report before launch approval
-- validate local control/state health and runbook presence (`PRODUCTION_RUNBOOK.md`)
+- validate local control/state health and runbook presence (`docs/PRODUCTION_RUNBOOK.md`)
 - in live mode, validate NDAX private connectivity and go-live preflight pass
 - emit machine-readable cutover report with launch/rollback/manual-verification checklist
 Acceptance:

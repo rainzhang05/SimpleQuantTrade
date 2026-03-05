@@ -96,7 +96,7 @@ Copy `.env.example` to `.env` and fill NDAX credentials before private API check
   - JSON summary to stdout
   - persisted report at `runtime/production_cutover/logs/production_cutover_report.json`
 - Operator runbook:
-  - `PRODUCTION_RUNBOOK.md`
+  - `docs/PRODUCTION_RUNBOOK.md`
 
 ## Testing and CI
 

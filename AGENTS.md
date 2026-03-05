@@ -11,7 +11,7 @@ The agent must follow the instructions below at all times.
 
 Before performing **any task**, the agent must:
 
-1. **Open and read `ROADMAP.md`**
+1. **Open and read `docs/ROADMAP.md`**
 2. Use it to understand:
    - project goals
    - constraints
@@ -20,12 +20,12 @@ Before performing **any task**, the agent must:
    - operational behavior
    - CLI requirements
    - trading logic
-3. Treat `ROADMAP.md` as the **primary specification** of the system.
+3. Treat `docs/ROADMAP.md` as the **primary specification** of the system.
 
-If any user request conflicts with `ROADMAP.md`, the agent should:
+If any user request conflicts with `docs/ROADMAP.md`, the agent should:
 
 1. Ask for clarification **or**
-2. Update `ROADMAP.md` if the user explicitly changes project requirements.
+2. Update `docs/ROADMAP.md` if the user explicitly changes project requirements.
 
 The roadmap must always represent the **current ground truth of the system design**.
 
@@ -38,7 +38,7 @@ The AI agent is responsible for the **entire lifecycle of the project**, includi
 ### Planning
 - Interpreting user instructions
 - Updating architecture if necessary
-- Updating `ROADMAP.md` when project scope changes
+- Updating `docs/ROADMAP.md` when project scope changes
 
 ### Implementation
 - Writing all code
@@ -93,7 +93,7 @@ The agent may:
 
 as long as:
 
-- the project continues to satisfy the **requirements defined in `ROADMAP.md`**
+- the project continues to satisfy the **requirements defined in `docs/ROADMAP.md`**
 - the CLI interface remains consistent with the roadmap.
 
 ---
@@ -118,7 +118,7 @@ The system must never:
 - borrow funds
 - exceed the allowed CAD budget
 
-These rules are defined in `ROADMAP.md` and must always be enforced.
+These rules are defined in `docs/ROADMAP.md` and must always be enforced.
 
 ### Graceful Operation
 The system must support:
@@ -137,12 +137,12 @@ and must handle shutdown **gracefully**, preserving state and logs.
 The agent must maintain documentation:
 
 ### Required files
-- `ROADMAP.md` — system design and specification
+- `docs/ROADMAP.md` — system design and specification
 - `AGENTS.md` — agent instructions
 
 If the system architecture changes significantly, the agent must update:
 
-- `ROADMAP.md`
+- `docs/ROADMAP.md`
 - any relevant documentation
 
 Documentation must always match the real system.
@@ -203,7 +203,7 @@ The agent should continuously improve the system when appropriate, including:
 - clearer code structure
 - performance improvements
 
-These improvements should **not violate the constraints defined in `ROADMAP.md`.**
+These improvements should **not violate the constraints defined in `docs/ROADMAP.md`.**
 
 ---
 
@@ -224,6 +224,6 @@ Speed of development is less important than stability.
 
 # 11. Final Rule
 
-**Always gain complete understanding of this project by reading `ROADMAP.md` and review the existing implementations in this repository before performing any task.**
+**Always gain complete understanding of this project by reading `docs/ROADMAP.md` and review the existing implementations in this repository before performing any task.**
 
 That document defines how the system must behave.
