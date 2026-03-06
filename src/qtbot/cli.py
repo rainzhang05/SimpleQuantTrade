@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timedelta, timezone
 import json
+from pathlib import Path
 import sys
+from typing import Callable
 
 from qtbot.config import RuntimeConfig, load_runtime_config
 from qtbot.control import Command, read_control, write_control
@@ -109,6 +111,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--timeframe",
         default="15m",
         help="Candle timeframe alias (currently supports 15m).",
+    )
+    data_backfill_parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Disable live progress lines on stderr (JSON summary still printed on stdout).",
     )
 
     data_status_parser = subparsers.add_parser(
@@ -234,6 +241,7 @@ def main(argv: list[str] | None = None) -> int:
             from_date=args.from_date,
             to_date=args.to_date,
             timeframe=args.timeframe,
+            quiet=args.quiet,
         )
     if command == "data-status":
         return _handle_data_status(
@@ -505,24 +513,35 @@ def _handle_data_backfill(
     from_date: str,
     to_date: str,
     timeframe: str,
+    quiet: bool = False,
 ) -> int:
+    progress_callback, progress_log = _build_data_backfill_progress_writer(
+        config=config,
+        quiet=quiet,
+    )
     try:
         parsed_from = _parse_date(from_date)
         parsed_to = _parse_date(to_date)
         if parsed_from > parsed_to:
             raise ValueError("--from must be <= --to")
 
-        service = _make_data_service(config)
+        service = _make_data_service(
+            config,
+            progress_callback=progress_callback,
+        )
         summary = service.backfill(
             from_date=parsed_from,
             to_date=parsed_to,
             timeframe=timeframe,
         )
     except (NdaxError, ValueError) as exc:
+        progress_callback(f"data_backfill_failed reason={exc}")
         print(f"Data backfill failed: {exc}", file=sys.stderr)
         return 1
 
-    print(json.dumps(summary.to_payload(), indent=2, sort_keys=True))
+    payload = summary.to_payload()
+    payload["progress_log_file"] = str(progress_log)
+    print(json.dumps(payload, indent=2, sort_keys=True))
     return 0 if summary.symbols_with_errors == 0 else 1
 
 
@@ -612,7 +631,11 @@ def _make_ndax_client(config: RuntimeConfig) -> NdaxClient:
     )
 
 
-def _make_data_service(config: RuntimeConfig):
+def _make_data_service(
+    config: RuntimeConfig,
+    *,
+    progress_callback: Callable[[str], None] | None = None,
+):
     # Lazy import keeps non-data commands resilient if optional parquet dependency is absent.
     from qtbot.data import MarketDataService
 
@@ -622,7 +645,27 @@ def _make_data_service(config: RuntimeConfig):
         config=config,
         ndax_client=client,
         state_store=state_store,
+        progress_callback=progress_callback,
     )
+
+
+def _build_data_backfill_progress_writer(
+    *,
+    config: RuntimeConfig,
+    quiet: bool,
+) -> tuple[Callable[[str], None], Path]:
+    log_path = config.runtime_dir / "logs" / "data_backfill.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def _write(message: str) -> None:
+        timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+        line = f"{timestamp} {message}"
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+        if not quiet:
+            print(line, file=sys.stderr, flush=True)
+
+    return _write, log_path
 
 
 def _parse_date(raw_value: str):

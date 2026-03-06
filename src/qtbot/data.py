@@ -8,7 +8,7 @@ import logging
 import math
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -138,11 +138,13 @@ class MarketDataService:
         ndax_client: NdaxClient,
         state_store: StateStore,
         logger: logging.Logger | None = None,
+        progress_callback: Callable[[str], None] | None = None,
     ) -> None:
         self._config = config
         self._ndax_client = ndax_client
         self._state_store = state_store
         self._logger = logger or logging.getLogger("qtbot.data")
+        self._progress_callback = progress_callback
 
     def backfill(
         self,
@@ -156,8 +158,18 @@ class MarketDataService:
 
         interval_seconds = parse_timeframe_seconds(timeframe)
         started_at = _utc_now_iso()
+        self._emit_progress(
+            "data_backfill_started "
+            f"requested_from={from_date.isoformat()} requested_to={to_date.isoformat()} "
+            f"timeframe={timeframe}"
+        )
+        self._emit_progress("data_backfill_discovering_universe")
         instruments = self._ndax_client.get_instruments()
         resolution = resolve_tradable_universe(instruments)
+        self._emit_progress(
+            "data_backfill_universe_ready "
+            f"symbols={len(resolution.tradable)} skipped={len(resolution.skipped)}"
+        )
 
         symbol_summaries: list[SymbolBackfillSummary] = []
         errors = 0
@@ -191,8 +203,17 @@ class MarketDataService:
                 )
                 self._logger.exception("Backfill failed for symbol=%s", entry.ndax_symbol)
             symbol_summaries.append(summary)
+            self._emit_progress(
+                "symbol_backfill_complete "
+                f"symbol={summary.symbol} status={summary.status} rows={summary.row_count} "
+                f"rows_added={summary.rows_added} gaps={summary.gap_count}"
+            )
 
         completed_at = _utc_now_iso()
+        self._emit_progress(
+            "data_backfill_completed "
+            f"symbols_processed={len(symbol_summaries)} errors={errors}"
+        )
         return BackfillSummary(
             started_at_utc=started_at,
             completed_at_utc=completed_at,
@@ -289,8 +310,15 @@ class MarketDataService:
         chunk_count = 0
         fetched_rows = 0
         chunk_start = resume_from
+        chunks_total = _chunk_count(from_date=resume_from, to_date=to_date)
         while chunk_start <= to_date:
             chunk_end = min(to_date, chunk_start + timedelta(days=_CHUNK_DAYS - 1))
+            before_merge_count = len(existing)
+            self._emit_progress(
+                "symbol_chunk_fetch_start "
+                f"symbol={entry.ndax_symbol} chunk={chunk_count + 1}/{chunks_total} "
+                f"chunk_from={chunk_start.isoformat()} chunk_to={chunk_end.isoformat()}"
+            )
             rows = self._ndax_client.get_ticker_history(
                 instrument_id=entry.instrument_id,
                 interval_seconds=interval_seconds,
@@ -313,6 +341,13 @@ class MarketDataService:
                 to_date=to_date,
             )
             _write_parquet_records_atomic(output_path, existing)
+            after_merge_count = len(existing)
+            self._emit_progress(
+                "symbol_chunk "
+                f"symbol={entry.ndax_symbol} chunk={chunk_count}/{chunks_total} "
+                f"chunk_from={chunk_start.isoformat()} chunk_to={chunk_end.isoformat()} "
+                f"fetched_rows={len(rows)} merged_new={max(0, after_merge_count - before_merge_count)}"
+            )
             chunk_start = chunk_end + timedelta(days=1)
 
         in_range = _records_in_date_range(existing, from_date=from_date, to_date=to_date)
@@ -351,6 +386,10 @@ class MarketDataService:
             last_ts=last_ts,
             gap_count=gap_count,
         )
+
+    def _emit_progress(self, message: str) -> None:
+        if self._progress_callback is not None:
+            self._progress_callback(message)
 
     def _coverage_for_symbol(
         self,
@@ -563,6 +602,13 @@ def _count_gaps(*, timestamps: list[int], interval_seconds: int) -> int:
             continue
         gaps += max(0, diff // step - 1)
     return gaps
+
+
+def _chunk_count(*, from_date: date, to_date: date) -> int:
+    if from_date > to_date:
+        return 0
+    total_days = (to_date - from_date).days + 1
+    return (total_days + _CHUNK_DAYS - 1) // _CHUNK_DAYS
 
 
 def _read_parquet_records(path: Path) -> dict[int, dict[str, Any]]:

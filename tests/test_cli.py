@@ -84,6 +84,22 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.from_date, "2026-01-01")
         self.assertEqual(args.to_date, "2026-03-05")
         self.assertEqual(args.timeframe, "15m")
+        self.assertFalse(args.quiet)
+
+    def test_parser_accepts_data_backfill_quiet_flag(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "data-backfill",
+                "--from",
+                "2026-01-01",
+                "--to",
+                "2026-03-05",
+                "--quiet",
+            ]
+        )
+        self.assertEqual(args.command, "data-backfill")
+        self.assertTrue(args.quiet)
 
     def test_parser_accepts_data_status_flags(self) -> None:
         parser = build_parser()

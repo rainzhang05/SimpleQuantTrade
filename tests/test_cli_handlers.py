@@ -187,6 +187,7 @@ class CliHandlerTests(unittest.TestCase):
             self.assertEqual(err, "")
             payload = json.loads(out)
             self.assertEqual(payload["timeframe"], "15m")
+            self.assertIn("progress_log_file", payload)
             service.backfill.assert_called_once()
 
     def test_handle_data_status(self) -> None:
