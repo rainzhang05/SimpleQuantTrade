@@ -7,7 +7,8 @@ Canonical design source:
 
 Current rollout state:
 - Data foundation (dual-source + combined + calibration) is active.
-- Full ML bundle runtime path is phased and must follow `docs/PLAN.md` phases 5-9 in order.
+- Weighted training snapshot integration (Phase 5) is active.
+- Full ML bundle runtime path must follow `docs/PLAN.md` phases 6-9 in order.
 
 ## 1) Pre-Launch Readiness
 
@@ -26,6 +27,8 @@ Key artifacts:
 - `runtime/logs/trades.csv`
 - `runtime/logs/data_coverage_*.json`
 - `runtime/research/bridge_weighting/<RUN_ID>/metrics.json`
+- `data/snapshots/<SNAPSHOT_ID>/manifest.json`
+- `data/snapshots/<SNAPSHOT_ID>/rows.parquet`
 
 ## 2) ML/Data Readiness Commands
 
@@ -33,6 +36,7 @@ Run in order:
 ```bash
 PYTHONPATH=src python3 -m qtbot data-status --timeframe 15m --dataset all
 PYTHONPATH=src python3 -m qtbot data-weight-status --timeframe 15m
+PYTHONPATH=src python3 -m qtbot build-snapshot --asof <ISO_TIME> --timeframe 15m
 PYTHONPATH=src python3 -m qtbot staging-validate --offline-only --budget 1000 --cadence-seconds 1 --min-loops 1 --timeout-seconds 30
 PYTHONPATH=src python3 -m qtbot cutover-checklist --offline-only --budget 250 --staging-max-age-hours 168
 ```
@@ -40,16 +44,16 @@ PYTHONPATH=src python3 -m qtbot cutover-checklist --offline-only --budget 250 --
 Expected outcomes:
 - `combined` coverage meets configured contract.
 - at least one recent calibration report exists.
+- snapshot manifest reports `parity_check_passed=true`.
 - cutover reports `passed=true`.
 
 ## 2.1) Required Runway Before ML Live Activation
 
 This sequence is mandatory before enabling ML live order path:
-1. Complete Phase 5: weighted training snapshot integration.
-2. Complete Phase 6: walk-forward training and evaluator with deterministic metrics.
-3. Complete Phase 7: promotion gates and signed bundle publication.
-4. Complete Phase 8: runtime inference in observe-only mode with deterministic outputs.
-5. Complete Phase 9: staging/cutover reports and rollback drill evidence.
+1. Complete Phase 6: walk-forward training and evaluator with deterministic metrics.
+2. Complete Phase 7: promotion gates and signed bundle publication.
+3. Complete Phase 8: runtime inference in observe-only mode with deterministic outputs.
+4. Complete Phase 9: staging/cutover reports and rollback drill evidence.
 
 Evidence required to move between steps:
 1. reproducible snapshot hash for fixed as-of time.
@@ -83,6 +87,21 @@ PYTHONPATH=src python3 -m qtbot data-build-combined --from 2021-01-01 --to $(dat
 PYTHONPATH=src python3 -m qtbot data-calibrate-weights --from 2021-01-01 --to $(date -u +%F) --timeframe 15m --refresh monthly
 PYTHONPATH=src python3 -m qtbot data-weight-status --timeframe 15m
 ```
+
+### 3.4 Weighted training snapshot
+```bash
+PYTHONPATH=src python3 -m qtbot build-snapshot --asof "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --timeframe 15m
+```
+
+Expected outputs:
+- `data/snapshots/<SNAPSHOT_ID>/manifest.json`
+- `data/snapshots/<SNAPSHOT_ID>/rows.parquet`
+
+Snapshot readiness checks:
+- `parity_check_passed=true`
+- source mix present in manifest
+- synthetic rows include monthly effective weights
+- `dataset_hash` is stable for repeated runs at the same cutoff
 
 ## 4) Launch Procedure
 
@@ -122,7 +141,7 @@ PYTHONPATH=src python3 -m qtbot model-status
 PYTHONPATH=src python3 -m qtbot resume
 ```
 
-Training/promotion command flow once phases 5-7 are implemented:
+Training/promotion command flow from the current checkpoint:
 ```bash
 PYTHONPATH=src python3 -m qtbot build-snapshot --asof <ISO_TIME>
 PYTHONPATH=src python3 -m qtbot train --snapshot <SNAPSHOT_ID> --folds 12 --universe V1
@@ -178,7 +197,8 @@ Actions:
 2. rerun `data-backfill` for affected range.
 3. rerun `data-build-combined`.
 4. rerun `data-calibrate-weights`.
-5. verify coverage and weight status again.
+5. rerun `build-snapshot` for the intended cutoff.
+6. verify coverage, weight status, and snapshot manifest again.
 
 ### C) Risk-trigger halt (loss/slippage/errors)
 Actions:

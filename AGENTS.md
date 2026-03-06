@@ -86,6 +86,10 @@ Maintain:
 - tests for all new/changed behavior
 - CI coverage for new critical paths
 
+Coverage gate:
+- total test coverage must remain at or above `85%`
+- changes that drop coverage below `85%` are not acceptable because CI/workflow coverage enforcement will fail
+
 Avoid fragile, implicit, or non-deterministic behavior.
 
 ## 7) State and Data Safety
@@ -99,6 +103,9 @@ Protect these assets:
 - model bundles: `models/bundles/*`
 
 Never silently corrupt or overwrite critical state.
+
+Snapshot artifact rule:
+- treat `data/snapshots/<SNAPSHOT_ID>/manifest.json` and `rows.parquet` as immutable build artifacts once written.
 
 ## 8) When to Ask the User
 

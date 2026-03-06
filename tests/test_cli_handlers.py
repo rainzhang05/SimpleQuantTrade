@@ -61,6 +61,7 @@ class CliHandlerTests(unittest.TestCase):
                 mock.patch("qtbot.cli._handle_data_build_combined", return_value=0) as h_build_combined,
                 mock.patch("qtbot.cli._handle_data_calibrate_weights", return_value=0) as h_calibrate,
                 mock.patch("qtbot.cli._handle_data_weight_status", return_value=0) as h_weight_status,
+                mock.patch("qtbot.cli._handle_build_snapshot", return_value=0) as h_build_snapshot,
                 mock.patch("qtbot.cli._handle_staging_validate", return_value=0) as h_staging,
                 mock.patch("qtbot.cli._handle_cutover_checklist", return_value=0) as h_cutover,
             ):
@@ -164,6 +165,18 @@ class CliHandlerTests(unittest.TestCase):
 
                 self.assertEqual(cli.main(["data-weight-status"]), 0)
                 h_weight_status.assert_called_once()
+
+                self.assertEqual(
+                    cli.main(
+                        [
+                            "build-snapshot",
+                            "--asof",
+                            "2026-03-05T12:00:00Z",
+                        ]
+                    ),
+                    0,
+                )
+                h_build_snapshot.assert_called_once()
 
                 self.assertEqual(cli.main(["staging-validate", "--offline-only"]), 0)
                 h_staging.assert_called_once()
@@ -509,6 +522,41 @@ class CliHandlerTests(unittest.TestCase):
                 )
             self.assertEqual(code, 1)
             self.assertIn("Weight status failed", err)
+
+    def test_handle_build_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = make_runtime_config(Path(td))
+            summary = mock.Mock()
+            summary.to_payload.return_value = {
+                "snapshot_id": "20260305T120000Z_combined_15m_hash",
+                "dataset_hash": "hash",
+                "row_count": 42,
+            }
+            service = mock.Mock()
+            service.build_snapshot.return_value = summary
+            with mock.patch("qtbot.cli._make_snapshot_service", return_value=service):
+                code, out, err = _capture_output(
+                    cli._handle_build_snapshot,
+                    config=cfg,
+                    asof="2026-03-05T12:00:00Z",
+                    timeframe="15m",
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(err, "")
+            payload = json.loads(out)
+            self.assertEqual(payload["row_count"], 42)
+            service.build_snapshot.assert_called_once()
+
+            service.build_snapshot.side_effect = ValueError("bad asof")
+            with mock.patch("qtbot.cli._make_snapshot_service", return_value=service):
+                code, _, err = _capture_output(
+                    cli._handle_build_snapshot,
+                    config=cfg,
+                    asof="not-a-date",
+                    timeframe="15m",
+                )
+            self.assertEqual(code, 1)
+            self.assertIn("Snapshot build failed", err)
 
     def test_handle_start_and_main_dispatch(self) -> None:
         with tempfile.TemporaryDirectory() as td:

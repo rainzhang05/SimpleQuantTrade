@@ -12,7 +12,7 @@ Primary authority:
 - Phase 2 (Binance raw pipeline): `implemented`
 - Phase 3 (combined builder): `implemented`
 - Phase 4 (calibration research + weights): `implemented`
-- Phase 5 (training integration): `pending`
+- Phase 5 (training integration): `implemented`
 - Phase 6 (walk-forward trainer/evaluator): `pending`
 - Phase 7 (promotion + bundle publishing): `pending`
 - Phase 8 (live ML inference integration): `pending`
@@ -25,26 +25,25 @@ Notes:
 ## 0.1) Current Checkpoint and Immediate Next Phase
 
 Current official checkpoint:
-- Data stack phases 1-4 are complete and operational.
-- Next official implementation phase is **Phase 5 (Training Dataset Integration)**.
-- Model-training, promotion, and ML runtime cutover remain pending (phases 5-9).
+- Data stack phases 1-5 are complete and operational.
+- Next official implementation phase is **Phase 6 (Walk-Forward Training + Evaluation)**.
+- Model-training, promotion, and ML runtime cutover remain pending (phases 6-9).
 
-Phase 5 entry gate (must be true before coding starts):
+Phase 6 entry gate (must be true before coding starts):
 1. `data-status --dataset combined` shows coverage contract pass for the intended training window.
 2. `data-weight-status --timeframe 15m` shows recent monthly weights for train symbols.
-3. `data-build-combined` and `data-calibrate-weights` are reproducible over repeated runs.
+3. `build-snapshot --asof <ISO_TIME>` is reproducible over repeated runs with the same dataset hash.
 
-Phase 5 implementation objective:
-- Make `combined` the default supervised training dataset with deterministic per-row weighting.
+Phase 6 implementation objective:
+- Fit deterministic walk-forward training/evaluation runs from sealed weighted snapshots.
 
 ## 0.2) Step-by-Step Runway: Now -> Final Production ML
 
-1. Complete Phase 5 (weighted training dataset integration).
-2. Complete Phase 6 (walk-forward trainer + evaluator + metrics persistence).
-3. Complete Phase 7 (promotion gates + bundle artifact writer + atomic active pointer).
-4. Complete Phase 8 (live runtime inference on bar close with deterministic blend + observe-only fallback).
-5. Complete Phase 9 (staging/cutover finalization, runbook evidence bundle, rollback drill).
-6. Enable ML live order path only after all phase gates pass and operator checklist evidence is archived.
+1. Complete Phase 6 (walk-forward trainer + evaluator + metrics persistence).
+2. Complete Phase 7 (promotion gates + bundle artifact writer + atomic active pointer).
+3. Complete Phase 8 (live runtime inference on bar close with deterministic blend + observe-only fallback).
+4. Complete Phase 9 (staging/cutover finalization, runbook evidence bundle, rollback drill).
+5. Enable ML live order path only after all phase gates pass and operator checklist evidence is archived.
 
 Required evidence package for final production readiness:
 1. Snapshot reproducibility logs and dataset hashes.
@@ -145,7 +144,7 @@ Required evidence package for final production readiness:
 ### Acceptance gate
 - same fixed input window yields identical monthly `w_final` values.
 
-## 6) Phase 5: Training Dataset Integration (Official Training Data Phase)
+## 6) Phase 5: Training Dataset Integration (Official Training Data Phase, Implemented)
 
 This is the official phase where model-training input changes from NDAX-only to weighted combined dataset.
 

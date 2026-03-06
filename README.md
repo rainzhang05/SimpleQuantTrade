@@ -36,6 +36,7 @@ Authoritative docs:
 - `qtbot data-build-combined --from YYYY-MM-DD --to YYYY-MM-DD --timeframe 15m`
 - `qtbot data-calibrate-weights --from YYYY-MM-DD --to YYYY-MM-DD --timeframe 15m --refresh monthly`
 - `qtbot data-weight-status --timeframe 15m`
+- `qtbot build-snapshot --asof <ISO_TIME> --timeframe 15m`
 
 Defaults:
 - `data-backfill` defaults to `--sources ndax,binance`
@@ -65,7 +66,7 @@ PYTHONPATH=src python3 -m qtbot staging-validate --offline-only --budget 1000 --
 PYTHONPATH=src python3 -m qtbot cutover-checklist --offline-only --budget 250 --staging-max-age-hours 168
 ```
 
-## End-to-End Data Workflow (Implemented)
+## End-to-End Data Workflow (Implemented Through Phase 5)
 
 ### Step 1: Backfill raw NDAX + Binance 15m data
 ```bash
@@ -104,23 +105,33 @@ PYTHONPATH=src python3 -m qtbot data-weight-status --timeframe 15m
 Calibration report output:
 - `runtime/research/bridge_weighting/<RUN_ID>/metrics.json`
 
+### Step 5: Build sealed weighted training snapshot
+```bash
+PYTHONPATH=src python3 -m qtbot build-snapshot --asof "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --timeframe 15m
+```
+
+Snapshot output:
+- `data/snapshots/<SNAPSHOT_ID>/manifest.json`
+- `data/snapshots/<SNAPSHOT_ID>/rows.parquet`
+
 ## Next Steps to Final Production ML (Current -> Final)
 
 Current program status:
-- Implemented now: dual-source ingestion, combined CAD build, and monthly calibration weighting.
-- Next active build phase: training integration and model pipeline (see `docs/PLAN.md` phases 5-9).
+- Implemented now: dual-source ingestion, combined CAD build, monthly calibration weighting, and weighted training snapshot integration.
+- Next active build phase: walk-forward training/evaluation (see `docs/PLAN.md` phases 6-9).
 
 Execution sequence:
 1. Keep data current:
-   - rerun `data-backfill`, `data-build-combined`, and `data-calibrate-weights` for latest window.
-2. Implement snapshot + weighted training dataset integration (Phase 5).
-3. Implement walk-forward training/evaluation (Phase 6).
-4. Implement promotion gates and model bundle publishing (Phase 7).
-5. Implement live ML inference path with observe-only fallback (Phase 8).
-6. Complete staging/cutover evidence and rollback drill, then enable ML live path (Phase 9).
+   - rerun `data-backfill`, `data-build-combined`, `data-calibrate-weights`, and `build-snapshot` for the latest cutoff.
+2. Implement walk-forward training/evaluation (Phase 6).
+3. Implement promotion gates and model bundle publishing (Phase 7).
+4. Implement live ML inference path with observe-only fallback (Phase 8).
+5. Complete staging/cutover evidence and rollback drill, then enable ML live path (Phase 9).
+
+Implemented Phase 5 command:
+- `qtbot build-snapshot --asof <ISO_TIME>`
 
 Planned CLI commands for the remaining phases (not fully implemented yet):
-- `qtbot build-snapshot --asof <ISO_TIME>`
 - `qtbot train --snapshot <SNAPSHOT_ID> --folds <N> --universe V1`
 - `qtbot eval --run <RUN_ID>`
 - `qtbot promote --run <RUN_ID>`
@@ -139,6 +150,7 @@ Do not enable ML live trading until all phase gates pass:
 - `data/raw/ndax/15m/*.parquet`
 - `data/raw/binance/15m/*USDT.parquet`
 - `data/combined/15m/*.parquet`
+- `data/snapshots/*`
 - `runtime/state.sqlite`
 - `runtime/control.json`
 - `runtime/logs/*`

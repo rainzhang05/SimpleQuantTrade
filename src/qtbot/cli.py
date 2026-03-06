@@ -198,6 +198,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Timeframe alias (currently supports 15m).",
     )
 
+    build_snapshot_parser = subparsers.add_parser(
+        "build-snapshot",
+        help="Build a deterministic supervised training snapshot from local data.",
+    )
+    build_snapshot_parser.add_argument(
+        "--asof",
+        required=True,
+        help="As-of time in ISO 8601. UTC is assumed when no offset is provided.",
+    )
+    build_snapshot_parser.add_argument(
+        "--timeframe",
+        default="15m",
+        help="Timeframe alias (currently supports 15m).",
+    )
+
     staging_parser = subparsers.add_parser(
         "staging-validate",
         help="Run M10 staging validation workflow and emit JSON report.",
@@ -338,6 +353,12 @@ def main(argv: list[str] | None = None) -> int:
     if command == "data-weight-status":
         return _handle_data_weight_status(
             config=config,
+            timeframe=args.timeframe,
+        )
+    if command == "build-snapshot":
+        return _handle_build_snapshot(
+            config=config,
+            asof=args.asof,
             timeframe=args.timeframe,
         )
     if command == "staging-validate":
@@ -725,6 +746,27 @@ def _handle_data_weight_status(
     return 0
 
 
+def _handle_build_snapshot(
+    *,
+    config: RuntimeConfig,
+    asof: str,
+    timeframe: str,
+) -> int:
+    try:
+        parsed_asof = _parse_datetime_utc(asof)
+        service = _make_snapshot_service(config)
+        summary = service.build_snapshot(
+            asof=parsed_asof,
+            timeframe=timeframe,
+        )
+    except ValueError as exc:
+        print(f"Snapshot build failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(json.dumps(summary.to_payload(), indent=2, sort_keys=True))
+    return 0
+
+
 def _handle_staging_validate(
     *,
     config: RuntimeConfig,
@@ -824,6 +866,15 @@ def _make_data_service(
     )
 
 
+def _make_snapshot_service(config: RuntimeConfig):
+    from qtbot.snapshot import TrainingSnapshotService
+
+    return TrainingSnapshotService(
+        config=config,
+        state_store=StateStore(config.state_db),
+    )
+
+
 def _build_data_backfill_progress_writer(
     *,
     config: RuntimeConfig,
@@ -845,6 +896,17 @@ def _build_data_backfill_progress_writer(
 
 def _parse_date(raw_value: str):
     return datetime.strptime(raw_value, "%Y-%m-%d").date()
+
+
+def _parse_datetime_utc(raw_value: str) -> datetime:
+    value = raw_value.strip()
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("--asof must be a valid ISO 8601 timestamp") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _parse_sources_csv(raw_value: str) -> list[str]:

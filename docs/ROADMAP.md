@@ -43,7 +43,7 @@ Legacy fixed-rule 1m EMA/ATR behavior is archived at:
 - Runtime metadata/state DB: `runtime/state.sqlite`
 - Runtime controls/logs: `runtime/control.json`, `runtime/logs/`
 
-### 1.2 Training layer (phased)
+### 1.2 Training layer (Phase 5 snapshot implemented; later phases remain)
 - Sealed snapshot builder with deterministic dataset hash.
 - Deterministic feature pipeline (50-80 features).
 - Walk-forward orchestrator.
@@ -188,6 +188,36 @@ Refresh cadence:
 - Persist `forward_return` and `y`.
 - `y=1` only when forward return exceeds cost-adjusted threshold.
 
+### 7.3 Snapshot contract (implemented for Phase 5)
+Snapshot path:
+- `data/snapshots/<SNAPSHOT_ID>/`
+
+Required files:
+- `manifest.json`
+- `rows.parquet`
+
+Closed-bar cutoff rule:
+- `build-snapshot --asof <ISO_TIME>` includes only bars with `timestamp_ms < floor(asof, 15m)`.
+- labels are emitted only when the next contiguous 15m bar is also closed.
+
+Row contract in `rows.parquet`:
+- market columns retained: `open`, `high`, `low`, `close`, `volume`, `inside_bid`, `inside_ask`
+- row metadata: `symbol`, `timestamp_ms`, `next_timestamp_ms`, `source`, `effective_month`
+- quality/weight metadata: `quality_pass`, `weight_method_version`, `effective_monthly_weight`, `supervised_row_weight`
+- supervision fields: `label_available`, `row_status`, `next_close`, `forward_return`, `y`
+
+Phase 5 weighting rules:
+- default training dataset source is `combined` via `QTBOT_DATASET_MODE=combined`
+- NDAX rows use `effective_monthly_weight=1.0`
+- synthetic rows use monthly `w_final`
+- synthetic rows with `quality_pass=false` remain in the snapshot as `row_status=continuity_only`
+- `supervised_row_weight=0.0` when `label_available=false`
+
+Snapshot hash contract:
+- dataset hash is computed over snapshot row order, source tags, weights, and label fields
+- row order is deterministic: Universe V1 symbol order, then ascending `timestamp_ms`
+- manifest includes per-symbol parity checks and source-mix audits
+
 ## 8) Training, Evaluation, Promotion (Phased)
 
 ### 8.1 Models
@@ -273,8 +303,15 @@ Defaults:
 - `data-backfill` sources default to `ndax,binance`
 - `data-status` dataset default to `combined`
 
-### 11.3 Training/model commands (phased)
-- `build-snapshot`, `train`, `eval`, `promote`
+### 11.3 Snapshot command (implemented)
+- `qtbot build-snapshot --asof <ISO_TIME> --timeframe 15m`
+
+Defaults:
+- dataset source comes from `QTBOT_DATASET_MODE` (default `combined`)
+- if `<ISO_TIME>` omits an offset, UTC is assumed
+
+### 11.4 Training/model commands (phased)
+- `train`, `eval`, `promote`
 - `model-status`, `predict`, `set-active-bundle`
 
 ## 12) SQLite Schema Contract
@@ -348,24 +385,21 @@ I. Staging/cutover ML readiness
 ## 15) Current Program Status and Next-Step Gates
 
 Current status:
-- Milestones A-D are implemented (data ingestion, combined build, calibration weighting).
-- Milestones E-I remain the official implementation runway to production ML.
-- The immediate next milestone is **E (Training integration)**.
+- Milestones A-E are implemented (data ingestion, combined build, calibration weighting, weighted snapshot integration).
+- Milestones F-I remain the official implementation runway to production ML.
+- The immediate next milestone is **F (Cost-aware evaluator / walk-forward training)**.
 
 Mandatory gate sequence from current state to production:
-1. **E: Training integration**
-   - Entry: combined coverage contract pass + monthly weights available.
-   - Exit: reproducible training snapshot with source mix + row weights.
-2. **F: Cost-aware evaluator**
+1. **F: Cost-aware evaluator**
    - Entry: snapshot builder and weighted dataset path complete.
    - Exit: deterministic walk-forward metrics with sensitivity runs.
-3. **G: Promotion + bundle publisher**
+2. **G: Promotion + bundle publisher**
    - Entry: evaluator outputs complete and gate inputs persisted.
    - Exit: deterministic promote accept/reject + atomic `LATEST` update + signature verification.
-4. **H: Live inference integration**
+3. **H: Live inference integration**
    - Entry: at least one promoted bundle and passing model integrity checks.
    - Exit: bar-close deterministic predictions with observe-only safety fallback.
-5. **I: Staging/cutover readiness**
+4. **I: Staging/cutover readiness**
    - Entry: live inference path stable in observe-only.
    - Exit: staging + cutover reports pass with rollback drill evidence.
 

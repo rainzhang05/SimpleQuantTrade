@@ -153,6 +153,21 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.command, "data-weight-status")
         self.assertEqual(args.timeframe, "15m")
 
+    def test_parser_accepts_build_snapshot_flags(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "build-snapshot",
+                "--asof",
+                "2026-03-05T12:00:00Z",
+                "--timeframe",
+                "15m",
+            ]
+        )
+        self.assertEqual(args.command, "build-snapshot")
+        self.assertEqual(args.asof, "2026-03-05T12:00:00Z")
+        self.assertEqual(args.timeframe, "15m")
+
 
 if __name__ == "__main__":
     unittest.main()
