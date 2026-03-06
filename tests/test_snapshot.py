@@ -190,6 +190,89 @@ class SnapshotTests(unittest.TestCase):
             self.assertEqual(weights_used[("BTCCAD", "2026-01")].trainable_rows, 2)
             self.assertEqual(weights_used[("ETHCAD", "2026-01")].continuity_only_rows, 2)
 
+    def test_build_snapshot_excludes_gap_fill_rows_from_supervision(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cfg = make_runtime_config(root)
+            store = StateStore(cfg.state_db)
+            service = TrainingSnapshotService(config=cfg, state_store=store)
+
+            combined_dir = root / "data" / "combined" / "15m"
+            _write_market_rows(
+                combined_dir / "BTCCAD.parquet",
+                [
+                    {
+                        "timestamp_ms": _ts_ms(2026, 1, 1, 0, 0),
+                        "open": 100.0,
+                        "high": 101.0,
+                        "low": 99.0,
+                        "close": 100.0,
+                        "volume": 10.0,
+                        "symbol": "BTCCAD",
+                        "source": "synthetic",
+                    },
+                    {
+                        "timestamp_ms": _ts_ms(2026, 1, 1, 0, 15),
+                        "open": 100.0,
+                        "high": 100.0,
+                        "low": 100.0,
+                        "close": 100.0,
+                        "volume": 0.0,
+                        "symbol": "BTCCAD",
+                        "source": "synthetic_gap_fill",
+                    },
+                    {
+                        "timestamp_ms": _ts_ms(2026, 1, 1, 0, 30),
+                        "open": 101.0,
+                        "high": 102.0,
+                        "low": 100.0,
+                        "close": 101.0,
+                        "volume": 11.0,
+                        "symbol": "BTCCAD",
+                        "source": "synthetic",
+                    },
+                    {
+                        "timestamp_ms": _ts_ms(2026, 1, 1, 0, 45),
+                        "open": 102.0,
+                        "high": 103.0,
+                        "low": 101.0,
+                        "close": 102.0,
+                        "volume": 12.0,
+                        "symbol": "BTCCAD",
+                        "source": "ndax",
+                    },
+                ],
+            )
+            store.upsert_synthetic_weight(
+                symbol="BTCCAD",
+                timeframe="15m",
+                effective_month="2026-01",
+                weight_quality=0.40,
+                weight_backtest=0.30,
+                weight_final=0.35,
+                overlap_rows=5000,
+                quality_pass=True,
+                method_version="bridge_weight_v1",
+            )
+
+            summary = service.build_snapshot(
+                asof=datetime(2026, 1, 1, 1, 0, tzinfo=timezone.utc),
+                timeframe="15m",
+            )
+
+            self.assertEqual(summary.trainable_row_count, 1)
+            self.assertEqual(summary.continuity_only_row_count, 2)
+            self.assertEqual(summary.unlabeled_row_count, 1)
+            self.assertEqual(summary.source_mix["synthetic_gap_fill"], 1)
+
+            rows = pq.read_table(summary.rows_file).to_pylist()
+            self.assertEqual(rows[0]["row_status"], "continuity_only")
+            self.assertFalse(rows[0]["label_available"])
+            self.assertEqual(rows[1]["row_status"], "continuity_only")
+            self.assertFalse(rows[1]["label_available"])
+            self.assertEqual(rows[2]["row_status"], "trainable")
+            self.assertEqual(rows[3]["row_status"], "unlabeled_missing_next")
+
     def test_build_snapshot_is_deterministic_and_reuses_existing_output(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

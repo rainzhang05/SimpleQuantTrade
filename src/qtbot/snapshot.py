@@ -299,14 +299,21 @@ class TrainingSnapshotService:
                     next_row = rows[idx + 1] if idx + 1 < len(rows) else None
                     has_next = next_row is not None and int(next_row["timestamp_ms"]) == current_ts + (interval_seconds * 1000)
                     source = str(row["source"]).strip().lower()
-                    if source not in {"ndax", "synthetic"}:
+                    synthetic_source = source in {"synthetic", "synthetic_gap_fill"}
+                    next_source = (
+                        str(next_row["source"]).strip().lower()
+                        if next_row is not None
+                        else ""
+                    )
+                    next_gap_fill = next_source == "synthetic_gap_fill"
+                    if source not in {"ndax", "synthetic", "synthetic_gap_fill"}:
                         raise ValueError(f"{symbol} contains unsupported source value: {source}")
 
                     effective_month = _month_key(current_ts)
                     quality_pass = True
                     effective_monthly_weight = 1.0
                     weight_method_version = _NATIVE_WEIGHT_METHOD_VERSION
-                    if dataset == "combined" and source == "synthetic":
+                    if dataset == "combined" and synthetic_source:
                         weight_row = weight_lookup.get((symbol, effective_month))
                         if weight_row is None:
                             raise ValueError(
@@ -336,7 +343,10 @@ class TrainingSnapshotService:
                     if not has_next:
                         row_status = "unlabeled_missing_next"
                         label_available = False
-                    elif dataset == "combined" and source == "synthetic" and not quality_pass:
+                    elif dataset == "combined" and (source == "synthetic_gap_fill" or next_gap_fill):
+                        row_status = "continuity_only"
+                        label_available = False
+                    elif dataset == "combined" and synthetic_source and not quality_pass:
                         row_status = "continuity_only"
                         label_available = False
 
@@ -361,12 +371,12 @@ class TrainingSnapshotService:
                         trainable_row_count += 1
                         trainable_source_mix[source] = trainable_source_mix.get(source, 0) + 1
                         supervised_weight_sum += supervised_row_weight
-                        if dataset == "combined" and source == "synthetic":
+                        if dataset == "combined" and synthetic_source:
                             weights_used[(symbol, effective_month)]["trainable_rows"] += 1
                     elif row_status == "continuity_only":
                         symbol_continuity_only += 1
                         continuity_only_row_count += 1
-                        if dataset == "combined" and source == "synthetic":
+                        if dataset == "combined" and synthetic_source:
                             weights_used[(symbol, effective_month)]["continuity_only_rows"] += 1
                     else:
                         symbol_unlabeled += 1

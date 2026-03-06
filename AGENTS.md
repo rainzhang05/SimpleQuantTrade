@@ -107,6 +107,14 @@ Never silently corrupt or overwrite critical state.
 Snapshot artifact rule:
 - treat `data/snapshots/<SNAPSHOT_ID>/manifest.json` and `rows.parquet` as immutable build artifacts once written.
 
+Data repair rule:
+- preserve deterministic market-data repair behavior; exchange outage gaps may be sealed only via the repository's explicit deterministic repair path, not ad hoc manual edits
+
+Repository distribution rule:
+- `data/` is a local-only working set and must remain ignored by git
+- do not commit raw parquet files, combined parquet files, or snapshot artifacts
+- every cloned device is expected to regenerate its own `data/` tree via the documented data pipeline commands
+
 ## 8) When to Ask the User
 
 Ask for clarification when:

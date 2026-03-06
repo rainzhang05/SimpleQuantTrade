@@ -39,9 +39,11 @@ Legacy fixed-rule 1m EMA/ATR behavior is archived at:
 ### 1.1 Data layer (implemented core)
 - Raw NDAX candles: `data/raw/ndax/15m/<SYMBOL>.parquet`
 - Raw Binance candles: `data/raw/binance/15m/<SYMBOL>USDT.parquet`
+  - exchange-wide outage windows are sealed deterministically with carry-forward 15m rows (`source=binance_gap_fill`, zero volume)
 - Combined CAD dataset: `data/combined/15m/<SYMBOL>.parquet`
 - Runtime metadata/state DB: `runtime/state.sqlite`
 - Runtime controls/logs: `runtime/control.json`, `runtime/logs/`
+- `data/` is a local-only artifact tree and is not version-controlled; each machine must build or refresh it locally through the CLI pipeline.
 
 ### 1.2 Training layer (Phase 5 snapshot implemented; later phases remain)
 - Sealed snapshot builder with deterministic dataset hash.
@@ -127,8 +129,10 @@ For overlap timestamps where NDAX and Binance are both present:
 - Use robust monthly medians (clipped) for ratio/basis estimation.
 - Conversion factor selection per timestamp:
   - preferred: `USDTCAD_t * basis_month`
-  - fallback: monthly ratio estimate
-  - fallback: global ratio estimate
+  - fallback: per-symbol monthly ratio estimate
+  - fallback: per-symbol global ratio estimate
+  - fallback: universe monthly ratio estimate
+  - fallback: universe global ratio estimate
   - otherwise missing
 
 ### 5.4 Combined precedence
@@ -136,6 +140,15 @@ Per symbol/timestamp:
 1. Use NDAX row when present.
 2. Else use normalized Binance CAD row.
 3. Else mark missing.
+
+Operational interpretation:
+- raw NDAX history may remain empty or internally gapped for some listed instruments when NDAX does not return candles for those windows.
+- training and readiness gates evaluate the `combined` dataset contract, not raw NDAX completeness.
+- combined completeness is achieved by deterministic normalized-Binance substitution wherever NDAX bars are absent.
+
+Combined source tagging:
+- regular normalized Binance rows use `source=synthetic`
+- normalized gap-repair rows use `source=synthetic_gap_fill`
 
 ### 5.5 Combined health contract
 Combined dataset is healthy when:
@@ -211,6 +224,7 @@ Phase 5 weighting rules:
 - NDAX rows use `effective_monthly_weight=1.0`
 - synthetic rows use monthly `w_final`
 - synthetic rows with `quality_pass=false` remain in the snapshot as `row_status=continuity_only`
+- `synthetic_gap_fill` rows, and rows whose next bar is `synthetic_gap_fill`, remain continuity-only
 - `supervised_row_weight=0.0` when `label_available=false`
 
 Snapshot hash contract:

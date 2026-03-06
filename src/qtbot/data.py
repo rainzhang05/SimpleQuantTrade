@@ -28,6 +28,8 @@ _CHUNK_DAYS = 30
 _PARQUET_COMPRESSION = "zstd"
 _BINANCE_PAGE_LIMIT = 1000
 _WEIGHT_METHOD_VERSION = "bridge_weight_v1"
+_BINANCE_GAP_FILL_SOURCE = "binance_gap_fill"
+_SYNTHETIC_GAP_FILL_SOURCE = "synthetic_gap_fill"
 
 
 def parse_timeframe_seconds(raw_value: str) -> int:
@@ -290,6 +292,7 @@ class _ConversionContext:
     global_ratio: float | None
     global_basis: float | None
     fx_series: list[tuple[int, float]]
+    fx_timestamps: list[int]
 
 
 @dataclass(frozen=True)
@@ -529,6 +532,11 @@ class MarketDataService:
 
         targets = self._resolve_combined_targets()
         bridge_rows = self._load_ndax_bridge_rows(interval_seconds=interval_seconds)
+        shared_context = self._build_shared_conversion_context(
+            targets=targets,
+            interval_seconds=interval_seconds,
+            bridge_rows=bridge_rows,
+        )
 
         symbol_summaries: list[CombinedSymbolSummary] = []
         errors = 0
@@ -543,6 +551,7 @@ class MarketDataService:
                     timeframe=timeframe,
                     interval_seconds=interval_seconds,
                     bridge_rows=bridge_rows,
+                    shared_context=shared_context,
                 )
             except Exception as exc:
                 errors += 1
@@ -1026,6 +1035,20 @@ class MarketDataService:
                 f"source=binance symbol={pair_symbol} chunk={idx}/{len(missing_windows)} "
                 f"chunk_from={window_start.isoformat()} chunk_to={window_end.isoformat()} pages={pages} "
                 f"fetched_rows={fetched}"
+            )
+
+        repaired_rows = _repair_binance_outage_gaps(
+            target=existing,
+            from_date=from_date,
+            to_date=to_date,
+            interval_seconds=interval_seconds,
+            symbol=pair_symbol,
+        )
+        if repaired_rows > 0:
+            _write_market_records_atomic(output_path, existing)
+            self._emit_progress(
+                "symbol_gap_repair "
+                f"source=binance symbol={pair_symbol} repaired_rows={repaired_rows}"
             )
 
         in_range = _records_in_date_range(existing, from_date=from_date, to_date=to_date)
@@ -1518,6 +1541,45 @@ class MarketDataService:
             fallback_source="ndax",
         ).records
 
+    def _build_shared_conversion_context(
+        self,
+        *,
+        targets: list[tuple[str, str, str]],
+        interval_seconds: int,
+        bridge_rows: dict[int, dict[str, Any]],
+    ) -> _ConversionContext:
+        ratio_by_month_values: dict[str, list[float]] = {}
+        basis_by_month_values: dict[str, list[float]] = {}
+        fx_series = _fx_series_from_rows(bridge_rows)
+        fx_map = {ts: price for ts, price in fx_series}
+
+        for _, ndax_symbol, binance_symbol in targets:
+            ndax_rows = _read_market_records(
+                self._ndax_symbol_path(ndax_symbol, interval_seconds=interval_seconds),
+                interval_seconds=interval_seconds,
+                fallback_symbol=ndax_symbol,
+                fallback_source="ndax",
+            ).records
+            binance_rows = _read_market_records(
+                self._binance_symbol_path(binance_symbol, interval_seconds=interval_seconds),
+                interval_seconds=interval_seconds,
+                fallback_symbol=binance_symbol,
+                fallback_source="binance",
+            ).records
+            _collect_conversion_observations(
+                ndax_rows=ndax_rows,
+                binance_rows=binance_rows,
+                fx_map=fx_map,
+                ratio_by_month_values=ratio_by_month_values,
+                basis_by_month_values=basis_by_month_values,
+            )
+
+        return _finalize_conversion_context(
+            ratio_by_month_values=ratio_by_month_values,
+            basis_by_month_values=basis_by_month_values,
+            fx_series=fx_series,
+        )
+
     def _build_combined_symbol(
         self,
         *,
@@ -1529,6 +1591,7 @@ class MarketDataService:
         timeframe: str,
         interval_seconds: int,
         bridge_rows: dict[int, dict[str, Any]],
+        shared_context: _ConversionContext,
     ) -> CombinedSymbolSummary:
         ndax_path = self._ndax_symbol_path(ndax_symbol, interval_seconds=interval_seconds)
         binance_path = self._binance_symbol_path(binance_symbol, interval_seconds=interval_seconds)
@@ -1575,10 +1638,16 @@ class MarketDataService:
                 missing_count += 1
                 continue
 
-            factor = _conversion_factor(ts=ts, context=context)
+            factor = _conversion_factor(ts=ts, context=context, fallback_context=shared_context)
             if factor is None or factor <= 0:
                 missing_count += 1
                 continue
+
+            synthetic_source = (
+                _SYNTHETIC_GAP_FILL_SOURCE
+                if _is_gap_fill_source(binance_row.get("source"))
+                else "synthetic"
+            )
 
             converted = {
                 "timestamp_ms": ts,
@@ -1592,7 +1661,7 @@ class MarketDataService:
                 "instrument_id": 0,
                 "symbol": ndax_symbol,
                 "interval_seconds": int(interval_seconds),
-                "source": "synthetic",
+                "source": synthetic_source,
             }
             combined[ts] = converted
             synth_count += 1
@@ -1602,7 +1671,7 @@ class MarketDataService:
         timestamps = sorted(combined)
         first_ts = timestamps[0] if timestamps else None
         last_ts = timestamps[-1] if timestamps else None
-        gap_count = missing_count
+        gap_count = _count_gaps(timestamps=timestamps, interval_seconds=interval_seconds)
         combined_rows = len(combined)
         denom = max(1, ndax_count + synth_count)
         ndax_share = ndax_count / denom
@@ -1621,11 +1690,15 @@ class MarketDataService:
             build_hash=build_hash,
         )
 
-        coverage_pct = _coverage_pct_from_range(
-            row_count=combined_rows,
-            requested_from=from_date,
-            requested_to=to_date,
-            interval_seconds=interval_seconds,
+        coverage_pct = (
+            _coverage_pct_from_span(
+                first_ts=first_ts,
+                last_ts=last_ts,
+                row_count=combined_rows,
+                interval_seconds=interval_seconds,
+            )
+            if first_ts is not None and last_ts is not None and combined_rows > 0
+            else 0.0
         )
         self._state_store.upsert_data_coverage_v2(
             dataset="combined",
@@ -2133,55 +2206,50 @@ def _build_conversion_context(
 ) -> _ConversionContext:
     ratio_by_month_values: dict[str, list[float]] = {}
     basis_by_month_values: dict[str, list[float]] = {}
-
-    fx_series = sorted(
-        (
-            ts,
-            float(row["close"]),
-        )
-        for ts, row in fx_rows.items()
-        if float(row["close"]) > 0
-    )
+    fx_series = _fx_series_from_rows(fx_rows)
     fx_map = {ts: price for ts, price in fx_series}
 
-    for ts in sorted(set(ndax_rows).intersection(binance_rows)):
-        ndax_close = float(ndax_rows[ts]["close"])
-        binance_close = float(binance_rows[ts]["close"])
-        if ndax_close <= 0 or binance_close <= 0:
-            continue
-        ratio = ndax_close / binance_close
-        month_key = _month_key(ts)
-        ratio_by_month_values.setdefault(month_key, []).append(ratio)
+    _collect_conversion_observations(
+        ndax_rows=ndax_rows,
+        binance_rows=binance_rows,
+        fx_map=fx_map,
+        ratio_by_month_values=ratio_by_month_values,
+        basis_by_month_values=basis_by_month_values,
+    )
 
-        fx = fx_map.get(ts)
-        if fx is not None and fx > 0:
-            basis = ratio / fx
-            basis_by_month_values.setdefault(month_key, []).append(basis)
-
-    ratio_by_month = {key: _robust_median(values) for key, values in ratio_by_month_values.items() if values}
-    basis_by_month = {key: _robust_median(values) for key, values in basis_by_month_values.items() if values}
-
-    all_ratio_values = [value for values in ratio_by_month_values.values() for value in values]
-    all_basis_values = [value for values in basis_by_month_values.values() for value in values]
-
-    global_ratio = _robust_median(all_ratio_values) if all_ratio_values else None
-    global_basis = _robust_median(all_basis_values) if all_basis_values else None
-
-    return _ConversionContext(
-        ratio_by_month=ratio_by_month,
-        basis_by_month=basis_by_month,
-        global_ratio=global_ratio,
-        global_basis=global_basis,
+    return _finalize_conversion_context(
+        ratio_by_month_values=ratio_by_month_values,
+        basis_by_month_values=basis_by_month_values,
         fx_series=fx_series,
     )
 
 
-def _conversion_factor(*, ts: int, context: _ConversionContext) -> float | None:
+def _conversion_factor(
+    *,
+    ts: int,
+    context: _ConversionContext,
+    fallback_context: _ConversionContext | None = None,
+) -> float | None:
+    factor = _conversion_factor_from_context(ts=ts, context=context)
+    if factor is not None and factor > 0:
+        return factor
+    if fallback_context is not None:
+        factor = _conversion_factor_from_context(ts=ts, context=fallback_context)
+        if factor is not None and factor > 0:
+            return factor
+    return None
+
+
+def _conversion_factor_from_context(*, ts: int, context: _ConversionContext) -> float | None:
     month_key = _month_key(ts)
     ratio_month = context.ratio_by_month.get(month_key)
     basis_month = context.basis_by_month.get(month_key)
 
-    fx = _nearest_series_value(context.fx_series, ts)
+    fx = _nearest_series_value(
+        series=context.fx_series,
+        timestamps=context.fx_timestamps,
+        ts=ts,
+    )
     if fx is not None and fx > 0:
         basis = basis_month if basis_month is not None else context.global_basis
         if basis is not None and basis > 0:
@@ -2210,6 +2278,8 @@ def _compute_overlap_metrics(
     for ts in sorted(set(ndax_rows).intersection(binance_rows)):
         if ts < start_ms or ts >= end_exclusive_ms:
             continue
+        if _is_gap_fill_source(binance_rows[ts].get("source")):
+            continue
         ndax_close = float(ndax_rows[ts]["close"])
         raw_binance_close = float(binance_rows[ts]["close"])
         if ndax_close <= 0 or raw_binance_close <= 0:
@@ -2220,7 +2290,11 @@ def _compute_overlap_metrics(
         synth_close = raw_binance_close * factor
         overlap_points.append((ts, ndax_close, synth_close))
 
-        fx = _nearest_series_value(context.fx_series, ts)
+        fx = _nearest_series_value(
+            series=context.fx_series,
+            timestamps=context.fx_timestamps,
+            ts=ts,
+        )
         if fx is not None and fx > 0:
             ratio = ndax_close / raw_binance_close
             basis_values.append(ratio / fx)
@@ -2350,10 +2424,9 @@ def _grid_search_weight(
     return _clamp(best_weight, weight_min, weight_max)
 
 
-def _nearest_series_value(series: list[tuple[int, float]], ts: int) -> float | None:
+def _nearest_series_value(*, series: list[tuple[int, float]], timestamps: list[int], ts: int) -> float | None:
     if not series:
         return None
-    timestamps = [item[0] for item in series]
     idx = bisect_left(timestamps, ts)
     candidates: list[tuple[int, float]] = []
     if idx < len(series):
@@ -2365,6 +2438,113 @@ def _nearest_series_value(series: list[tuple[int, float]], ts: int) -> float | N
 
     best = min(candidates, key=lambda item: (abs(item[0] - ts), item[0]))
     return best[1]
+
+
+def _fx_series_from_rows(fx_rows: dict[int, dict[str, Any]]) -> list[tuple[int, float]]:
+    return sorted(
+        (
+            ts,
+            float(row["close"]),
+        )
+        for ts, row in fx_rows.items()
+        if float(row["close"]) > 0
+    )
+
+
+def _collect_conversion_observations(
+    *,
+    ndax_rows: dict[int, dict[str, Any]],
+    binance_rows: dict[int, dict[str, Any]],
+    fx_map: dict[int, float],
+    ratio_by_month_values: dict[str, list[float]],
+    basis_by_month_values: dict[str, list[float]],
+) -> None:
+    for ts in sorted(set(ndax_rows).intersection(binance_rows)):
+        binance_row = binance_rows[ts]
+        if _is_gap_fill_source(binance_row.get("source")):
+            continue
+        ndax_close = float(ndax_rows[ts]["close"])
+        binance_close = float(binance_row["close"])
+        if ndax_close <= 0 or binance_close <= 0:
+            continue
+        ratio = ndax_close / binance_close
+        month_key = _month_key(ts)
+        ratio_by_month_values.setdefault(month_key, []).append(ratio)
+
+        fx = fx_map.get(ts)
+        if fx is not None and fx > 0:
+            basis = ratio / fx
+            basis_by_month_values.setdefault(month_key, []).append(basis)
+
+
+def _finalize_conversion_context(
+    *,
+    ratio_by_month_values: dict[str, list[float]],
+    basis_by_month_values: dict[str, list[float]],
+    fx_series: list[tuple[int, float]],
+) -> _ConversionContext:
+    ratio_by_month = {key: _robust_median(values) for key, values in ratio_by_month_values.items() if values}
+    basis_by_month = {key: _robust_median(values) for key, values in basis_by_month_values.items() if values}
+
+    all_ratio_values = [value for values in ratio_by_month_values.values() for value in values]
+    all_basis_values = [value for values in basis_by_month_values.values() for value in values]
+
+    global_ratio = _robust_median(all_ratio_values) if all_ratio_values else None
+    global_basis = _robust_median(all_basis_values) if all_basis_values else None
+
+    return _ConversionContext(
+        ratio_by_month=ratio_by_month,
+        basis_by_month=basis_by_month,
+        global_ratio=global_ratio,
+        global_basis=global_basis,
+        fx_series=fx_series,
+        fx_timestamps=[item[0] for item in fx_series],
+    )
+
+
+def _is_gap_fill_source(source: Any) -> bool:
+    return str(source).strip().lower() in {_BINANCE_GAP_FILL_SOURCE, _SYNTHETIC_GAP_FILL_SOURCE}
+
+
+def _repair_binance_outage_gaps(
+    *,
+    target: dict[int, dict[str, Any]],
+    from_date: date,
+    to_date: date,
+    interval_seconds: int,
+    symbol: str,
+) -> int:
+    timestamps = sorted(_records_in_date_range(target, from_date=from_date, to_date=to_date))
+    if len(timestamps) <= 1:
+        return 0
+
+    step = interval_seconds * 1000
+    repaired = 0
+    for left_ts, right_ts in zip(timestamps, timestamps[1:]):
+        if right_ts - left_ts <= step:
+            continue
+        close_price = float(target[left_ts]["close"])
+        if not math.isfinite(close_price) or close_price <= 0:
+            continue
+        missing_ts = left_ts + step
+        while missing_ts < right_ts:
+            target[missing_ts] = {
+                "timestamp_ms": missing_ts,
+                "open": close_price,
+                "high": close_price,
+                "low": close_price,
+                "close": close_price,
+                "volume": 0.0,
+                "inside_bid": 0.0,
+                "inside_ask": 0.0,
+                "instrument_id": 0,
+                "symbol": symbol.upper(),
+                "interval_seconds": int(interval_seconds),
+                "source": _BINANCE_GAP_FILL_SOURCE,
+            }
+            repaired += 1
+            missing_ts += step
+    return repaired
 
 
 def _coverage_pct_from_span(*, first_ts: int, last_ts: int, row_count: int, interval_seconds: int) -> float:

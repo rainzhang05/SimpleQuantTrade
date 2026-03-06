@@ -30,6 +30,10 @@ Key artifacts:
 - `data/snapshots/<SNAPSHOT_ID>/manifest.json`
 - `data/snapshots/<SNAPSHOT_ID>/rows.parquet`
 
+Local artifact rule:
+- `data/` is not version-controlled.
+- Every machine must run the data pipeline locally before training/readiness checks.
+
 ## 2) ML/Data Readiness Commands
 
 Run in order:
@@ -46,6 +50,7 @@ Expected outcomes:
 - at least one recent calibration report exists.
 - snapshot manifest reports `parity_check_passed=true`.
 - cutover reports `passed=true`.
+- official Binance outage windows, if any, have been sealed deterministically during backfill.
 
 ## 2.1) Required Runway Before ML Live Activation
 
@@ -73,6 +78,7 @@ Stop/resume behavior:
 - Safe to interrupt.
 - Rerun same command to continue missing windows.
 - No duplicate rows on rerun.
+- This step is mandatory on every fresh clone because historical parquet files are local-only.
 
 Backfill logs:
 - `runtime/logs/data_backfill.log`
@@ -199,6 +205,11 @@ Actions:
 4. rerun `data-calibrate-weights`.
 5. rerun `build-snapshot` for the intended cutoff.
 6. verify coverage, weight status, and snapshot manifest again.
+
+Notes:
+- Binance 15m outage windows are handled by deterministic carry-forward repair rows; do not patch files manually.
+- Symbols with little or no symbol-local NDAX overlap rely on shared universe-level CAD conversion fallback during combined build.
+- Symbols whose raw NDAX history is empty or internally gapped are expected to remain trainable through the `combined` dataset as long as combined coverage passes.
 
 ### C) Risk-trigger halt (loss/slippage/errors)
 Actions:

@@ -59,6 +59,10 @@ Required NDAX private credentials for private commands:
 - `NDAX_API_SECRET`
 - `NDAX_USER_ID`
 
+Local data rule:
+- `data/` is not version-controlled.
+- After cloning on a new machine, you must run the data workflow locally to populate raw, combined, and snapshot artifacts.
+
 ### 3) Validate runtime shell
 ```bash
 PYTHONPATH=src python3 -m qtbot status
@@ -77,6 +81,7 @@ Resume behavior:
 - Safe to stop anytime.
 - Rerun the same command to continue from missing windows.
 - No duplicate rows are written (idempotent merge).
+- Exchange-wide Binance outage windows are sealed deterministically with flat zero-volume carry rows.
 
 Backfill progress log:
 - `runtime/logs/data_backfill.log`
@@ -96,6 +101,11 @@ Coverage reports are written to:
 PYTHONPATH=src python3 -m qtbot data-build-combined --from 2021-01-01 --to $(date -u +%F) --timeframe 15m
 ```
 
+Combined build notes:
+- NDAX rows still take precedence over synthetic rows.
+- Symbols without enough symbol-local NDAX overlap fall back to shared universe-level CAD conversion ratios.
+- If NDAX omits a symbol entirely or has internal history gaps, the combined dataset fills those bars from normalized Binance and keeps source tags for audit.
+
 ### Step 4: Calibrate monthly synthetic weights
 ```bash
 PYTHONPATH=src python3 -m qtbot data-calibrate-weights --from 2021-01-01 --to $(date -u +%F) --timeframe 15m --refresh monthly
@@ -113,6 +123,10 @@ PYTHONPATH=src python3 -m qtbot build-snapshot --asof "$(date -u +%Y-%m-%dT%H:%M
 Snapshot output:
 - `data/snapshots/<SNAPSHOT_ID>/manifest.json`
 - `data/snapshots/<SNAPSHOT_ID>/rows.parquet`
+
+Snapshot supervision notes:
+- `synthetic_gap_fill` rows are retained for continuity/audit.
+- `synthetic_gap_fill` rows, and rows whose next bar is `synthetic_gap_fill`, are excluded from supervised labels.
 
 ## Next Steps to Final Production ML (Current -> Final)
 
@@ -147,6 +161,7 @@ Do not enable ML live trading until all phase gates pass:
 
 ## Storage Contract
 
+All `data/` paths below are local-only and ignored by git:
 - `data/raw/ndax/15m/*.parquet`
 - `data/raw/binance/15m/*USDT.parquet`
 - `data/combined/15m/*.parquet`

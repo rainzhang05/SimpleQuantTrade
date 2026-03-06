@@ -72,6 +72,15 @@ class _FakeNdaxClientWithGap(_FakeNdaxClient):
         self._rows_by_instrument[2] = [row for idx, row in enumerate(rows) if idx != 10]
 
 
+class _FakeNdaxClientWithEmptyBch(_FakeNdaxClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self._instruments.append(
+            {"Product1Symbol": "BCH", "Product2Symbol": "CAD", "Symbol": "BCHCAD", "InstrumentId": 4}
+        )
+        self._rows_by_instrument[4] = []
+
+
 class _FakeBinanceClient:
     def __init__(self) -> None:
         self._symbols = {"BTCUSDT", "ETHUSDT"}
@@ -113,6 +122,24 @@ class _FakeBinanceClient:
                 ]
             )
         return rows
+
+
+class _FakeBinanceClientWithGap(_FakeBinanceClient):
+    def __init__(self) -> None:
+        super().__init__()
+        rows = self._rows_by_symbol["BTCUSDT"]
+        self._rows_by_symbol["BTCUSDT"] = [row for idx, row in enumerate(rows) if idx not in {10, 11, 12}]
+
+
+class _FakeBinanceClientWithBch(_FakeBinanceClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self._symbols.add("BCHUSDT")
+        self._rows_by_symbol["BCHUSDT"] = self._generate_rows(
+            start_ts_ms=_ts_ms(2026, 1, 1, 0, 0),
+            periods=96 * 3,
+            seed=35.0,
+        )
 
 
 class DataServiceTests(unittest.TestCase):
@@ -226,6 +253,66 @@ class DataServiceTests(unittest.TestCase):
 
             coverage_rows = store.get_data_coverage(timeframe="15m")
             self.assertTrue(any(row["symbol"] == "ETHCAD" for row in coverage_rows))
+
+    def test_backfill_repairs_binance_outage_gaps(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = make_runtime_config(Path(td))
+            store = StateStore(cfg.state_db)
+            service = MarketDataService(
+                config=cfg,
+                ndax_client=_FakeNdaxClient(),
+                binance_client=_FakeBinanceClientWithGap(),
+                state_store=store,
+            )
+
+            summary = service.backfill(
+                from_date=date(2026, 1, 1),
+                to_date=date(2026, 1, 3),
+                timeframe="15m",
+                sources=["binance"],
+            )
+
+            btc = next(item for item in summary.symbols if item.symbol == "BTCUSDT")
+            self.assertEqual(btc.gap_count, 0)
+            self.assertEqual(btc.row_count, 96 * 3)
+
+            btc_file = Path(td) / "data" / "raw" / "binance" / "15m" / "BTCUSDT.parquet"
+            rows = pq.read_table(btc_file).to_pylist()
+            repaired = [row for row in rows if row["source"] == "binance_gap_fill"]
+            self.assertEqual(len(repaired), 3)
+            self.assertTrue(all(float(row["volume"]) == 0.0 for row in repaired))
+
+    def test_build_combined_uses_shared_conversion_context_for_empty_ndax_history(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = make_runtime_config(Path(td))
+            store = StateStore(cfg.state_db)
+            service = MarketDataService(
+                config=cfg,
+                ndax_client=_FakeNdaxClientWithEmptyBch(),
+                binance_client=_FakeBinanceClientWithBch(),
+                state_store=store,
+            )
+
+            service.backfill(
+                from_date=date(2025, 12, 1),
+                to_date=date(2026, 1, 3),
+                timeframe="15m",
+                sources=["ndax", "binance"],
+            )
+            combined = service.build_combined(
+                from_date=date(2025, 12, 1),
+                to_date=date(2026, 1, 3),
+                timeframe="15m",
+            )
+
+            bch = next(item for item in combined.symbols if item.symbol == "BCHCAD")
+            self.assertEqual(bch.combined_rows, 96 * 3)
+            self.assertEqual(bch.gap_count, 0)
+
+            bch_file = Path(td) / "data" / "combined" / "15m" / "BCHCAD.parquet"
+            rows = pq.read_table(bch_file).to_pylist()
+            self.assertTrue(rows)
+            self.assertTrue(all(row["source"] == "synthetic" for row in rows))
 
     def test_dual_source_backfill_and_combined_pipeline(self) -> None:
         with tempfile.TemporaryDirectory() as td:

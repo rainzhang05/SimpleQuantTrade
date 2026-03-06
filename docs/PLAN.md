@@ -58,6 +58,7 @@ Required evidence package for final production readiness:
 - Canonical roadmap rewritten for dual-source data architecture.
 - CLI/config/storage/DB contracts frozen.
 - Legacy system moved to explicit archive reference.
+- Repository distribution contract fixed: `data/` remains local-only and is regenerated per machine.
 
 ### Deterministic constraints
 - All public interfaces documented exactly once and kept consistent across docs.
@@ -91,6 +92,7 @@ Required evidence package for final production readiness:
 - Binance client and 15m USDT spot kline ingestion.
 - Deterministic pagination with overlap page for restart safety.
 - Checkpoint integration and idempotent parquet writes.
+- Deterministic sealing of exchange-wide Binance outage windows with carry-forward 15m rows.
 
 ### Module boundaries
 - `src/qtbot/binance_client.py`
@@ -109,6 +111,7 @@ Required evidence package for final production readiness:
 ### Deliverables
 - `data-build-combined` command.
 - Binance->CAD normalization bridge using NDAX overlap and `USDTCAD` when available.
+- Shared universe-level CAD conversion fallback when symbol-local overlap is absent.
 - Deterministic precedence merge: NDAX first, synthetic fallback.
 - Combined build hash and build audit records.
 
@@ -155,6 +158,7 @@ This is the official phase where model-training input changes from NDAX-only to 
   - NDAX rows weight `1.0`
   - synthetic rows weight `w_final`
 - quality-failed synthetic rows excluded from supervised labels (continuity-only).
+- gap-repair synthetic rows remain continuity-only for supervision.
 - sealed snapshot includes source mix and effective monthly weights used for each row.
 
 ### Deterministic constraints
