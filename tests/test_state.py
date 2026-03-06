@@ -333,10 +333,11 @@ class StateStoreTests(unittest.TestCase):
                 from_ts=1735689600000,
                 to_ts=1735775100000,
                 ndax_rows=95,
-                binance_rows=96,
+                external_rows=96,
                 combined_rows=96,
                 gap_count=0,
                 build_hash="abc123",
+                external_source="kraken",
             )
 
             store.upsert_training_run(
@@ -399,6 +400,59 @@ class StateStoreTests(unittest.TestCase):
             fold_metrics = store.get_fold_metrics(run_id="run123")
             self.assertEqual(len(fold_metrics), 1)
             self.assertEqual(fold_metrics[0]["scenario"], "weighted_combined")
+
+    def test_insert_combined_build_supports_legacy_binance_rows_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "state.sqlite"
+            conn = sqlite3.connect(db_path)
+            try:
+                conn.execute(
+                    """
+                    CREATE TABLE combined_builds (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        symbol TEXT NOT NULL,
+                        timeframe TEXT NOT NULL,
+                        from_ts INTEGER NOT NULL,
+                        to_ts INTEGER NOT NULL,
+                        ndax_rows INTEGER NOT NULL,
+                        binance_rows INTEGER NOT NULL,
+                        combined_rows INTEGER NOT NULL,
+                        gap_count INTEGER NOT NULL,
+                        build_hash TEXT NOT NULL,
+                        updated_at_utc TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            store = StateStore(db_path)
+            store.insert_combined_build(
+                symbol="BTCCAD",
+                timeframe="15m",
+                from_ts=1735689600000,
+                to_ts=1735775100000,
+                ndax_rows=95,
+                external_rows=96,
+                combined_rows=96,
+                gap_count=0,
+                build_hash="abc123",
+                external_source="kraken",
+            )
+
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            try:
+                row = conn.execute(
+                    "SELECT binance_rows, external_rows, external_source FROM combined_builds"
+                ).fetchone()
+            finally:
+                conn.close()
+            assert row is not None
+            self.assertEqual(int(row["binance_rows"]), 96)
+            self.assertEqual(int(row["external_rows"]), 96)
+            self.assertEqual(row["external_source"], "kraken")
 
 
 if __name__ == "__main__":

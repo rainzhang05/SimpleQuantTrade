@@ -199,7 +199,30 @@ def _build_training_fixture(root: Path, snapshot_id: str, *, ndax_snapshot_start
 
     _write_market(root / "data" / "raw" / "ndax" / "15m" / "BTCCAD.parquet", market_rows_ndax)
     _write_market(root / "data" / "raw" / "binance" / "15m" / "BTCUSDT.parquet", market_rows_binance)
+    _write_market(root / "data" / "raw" / "external" / "15m" / "BTCCAD.parquet", market_rows_binance)
     _write_market(root / "data" / "raw" / "ndax" / "15m" / "USDTCAD.parquet", fx_rows)
+    selection_path = root / "data" / "raw" / "external" / "15m" / "selection.json"
+    selection_path.parent.mkdir(parents=True, exist_ok=True)
+    selection_path.write_text(
+        json.dumps(
+            {
+                "generated_at_utc": "2026-03-06T00:00:00+00:00",
+                "interval_seconds": 900,
+                "selections": {
+                    "BTCCAD": {
+                        "ticker": "BTC",
+                        "source": "binance",
+                        "symbol": "BTCUSDT",
+                        "quote_currency": "USDT",
+                    }
+                },
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 class TrainingServiceTests(unittest.TestCase):

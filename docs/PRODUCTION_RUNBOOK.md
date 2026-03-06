@@ -1,12 +1,12 @@
-# Production Runbook: ML 15m Dual-Source Operations
+# Production Runbook: ML 15m Multi-Source Operations
 
-This runbook covers production-safe operation for the NDAX execution runtime with NDAX+Binance training data pipeline.
+This runbook covers production-safe operation for the NDAX execution runtime with NDAX + Kraken primary + Binance fallback training data pipeline.
 
 Canonical design source:
 - `docs/ROADMAP.md`
 
 Current rollout state:
-- Data foundation (dual-source + combined + calibration) is active.
+- Data foundation (multi-source + combined + calibration) is active.
 - Weighted training snapshot integration (Phase 5) is active.
 - Walk-forward training/evaluation (Phase 6) is active.
 - Bundle publishing and live ML runtime path must still follow `docs/PLAN.md` phases 7-9 in order.
@@ -57,7 +57,7 @@ Expected outcomes:
 - at least one recent calibration report exists.
 - snapshot manifest reports `parity_check_passed=true`.
 - cutover reports `passed=true`.
-- official Binance outage windows, if any, have been sealed deterministically during backfill.
+- official Kraken/Binance outage windows, if any, have been sealed deterministically during backfill.
 
 ## 2.1) Required Runway Before ML Live Activation
 
@@ -77,7 +77,7 @@ Evidence required to move between steps:
 
 ### 3.1 Full historical backfill
 ```bash
-PYTHONPATH=src python3 -m qtbot data-backfill --from 2021-01-01 --to $(date -u +%F) --timeframe 15m --sources ndax,binance
+PYTHONPATH=src python3 -m qtbot data-backfill --from earliest --to $(date -u +%F) --timeframe 15m --sources ndax,kraken,binance
 ```
 
 Stop/resume behavior:
@@ -85,6 +85,8 @@ Stop/resume behavior:
 - Rerun same command to continue missing windows.
 - No duplicate rows on rerun.
 - This step is mandatory on every fresh clone because historical parquet files are local-only.
+- Kraken archive CSVs under `data/kraken/` seed the full historical backfill; post-archive dates are topped up from the Kraken trades API.
+- If Kraken top-up is still catching up after the archive end, `data-build-combined` may still remain complete because Binance is allowed to fill timestamps Kraken has not yet reached.
 
 Backfill logs:
 - `runtime/logs/data_backfill.log`
@@ -93,6 +95,11 @@ Backfill logs:
 ```bash
 PYTHONPATH=src python3 -m qtbot data-build-combined --from 2021-01-01 --to $(date -u +%F) --timeframe 15m
 ```
+
+Combined build note:
+- NDAX remains first priority.
+- Kraken remains the preferred calibrated external source.
+- Binance may still fill timestamps missing from the preferred external source so the combined dataset remains continuous.
 
 ### 3.3 Monthly calibration
 ```bash
@@ -231,7 +238,7 @@ Actions:
 6. verify coverage, weight status, and snapshot manifest again.
 
 Notes:
-- Binance 15m outage windows are handled by deterministic carry-forward repair rows; do not patch files manually.
+- Kraken and Binance 15m outage windows are handled by deterministic carry-forward repair rows; do not patch files manually.
 - Symbols with little or no symbol-local NDAX overlap rely on shared universe-level CAD conversion fallback during combined build.
 - Symbols whose raw NDAX history is empty or internally gapped are expected to remain trainable through the `combined` dataset as long as combined coverage passes.
 

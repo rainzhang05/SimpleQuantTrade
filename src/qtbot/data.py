@@ -11,6 +11,7 @@ import logging
 import math
 import os
 from pathlib import Path
+import re
 import statistics
 from typing import Any, Callable, Iterable
 
@@ -19,6 +20,7 @@ import pyarrow.parquet as pq
 
 from qtbot.binance_client import BinanceClient, BinanceError
 from qtbot.config import RuntimeConfig
+from qtbot.kraken_client import KrakenClient, KrakenError
 from qtbot.ndax_client import NdaxClient, NdaxError
 from qtbot.state import StateStore
 from qtbot.universe import UNIVERSE_V1_COINS, UniverseEntry, resolve_tradable_universe
@@ -29,8 +31,13 @@ _PARQUET_COMPRESSION = "zstd"
 _BINANCE_PAGE_LIMIT = 1000
 _WEIGHT_METHOD_VERSION = "bridge_weight_v1"
 _BINANCE_GAP_FILL_SOURCE = "binance_gap_fill"
+_KRAKEN_GAP_FILL_SOURCE = "kraken_gap_fill"
 _SYNTHETIC_GAP_FILL_SOURCE = "synthetic_gap_fill"
 _SUPERVISED_ELIGIBILITY_MIN_OVERLAP_ROWS = 250
+_KRAKEN_SUPPORTED_QUOTES = ("CAD", "USD", "USDT", "USDC")
+_KRAKEN_QUOTE_PRIORITY = ("CAD", "USD", "USDT", "USDC")
+_KRAKEN_PREFIX_OVERRIDES = {"BTC": "XBT", "DOGE": "XDG"}
+_KRAKEN_FLUSH_EVERY_CHUNKS = 8
 
 
 def parse_timeframe_seconds(raw_value: str) -> int:
@@ -175,13 +182,16 @@ class CombinedSymbolSummary:
     status: str
     message: str
     ndax_rows: int
-    binance_rows: int
+    external_rows: int
     combined_rows: int
     gap_count: int
     ndax_share: float
     synth_share: float
     build_hash: str
     file_path: str
+    external_source: str
+    external_symbol: str | None
+    external_quote: str | None
 
 
 @dataclass(frozen=True)
@@ -314,6 +324,28 @@ class _OverlapMetrics:
     synth_returns: list[float]
 
 
+@dataclass(frozen=True)
+class _ExternalCandidate:
+    source: str
+    symbol: str
+    quote_currency: str
+    path: Path
+    priority_rank: int
+
+
+@dataclass(frozen=True)
+class _ExternalSelection:
+    ticker: str
+    ndax_symbol: str
+    source: str
+    symbol: str
+    quote_currency: str
+    path: Path
+    records: dict[int, dict[str, Any]]
+    context: _ConversionContext
+    overlap_metrics: _OverlapMetrics
+
+
 class MarketDataService:
     """Dual-source deterministic market data workflows."""
 
@@ -324,12 +356,14 @@ class MarketDataService:
         ndax_client: NdaxClient,
         state_store: StateStore,
         binance_client: BinanceClient | None = None,
+        kraken_client: KrakenClient | None = None,
         logger: logging.Logger | None = None,
         progress_callback: Callable[[str], None] | None = None,
     ) -> None:
         self._config = config
         self._ndax_client = ndax_client
         self._binance_client = binance_client
+        self._kraken_client = kraken_client
         self._state_store = state_store
         self._logger = logger or logging.getLogger("qtbot.data")
         self._progress_callback = progress_callback
@@ -337,12 +371,12 @@ class MarketDataService:
     def backfill(
         self,
         *,
-        from_date: date,
+        from_date: date | None,
         to_date: date,
         timeframe: str,
         sources: Iterable[str] | None = None,
     ) -> BackfillSummary:
-        if from_date > to_date:
+        if from_date is not None and from_date > to_date:
             raise ValueError("from_date must be <= to_date.")
 
         interval_seconds = parse_timeframe_seconds(timeframe)
@@ -351,7 +385,8 @@ class MarketDataService:
         started_at = _utc_now_iso()
         self._emit_progress(
             "data_backfill_started "
-            f"requested_from={from_date.isoformat()} requested_to={to_date.isoformat()} "
+            f"requested_from={(from_date.isoformat() if from_date is not None else 'earliest')} "
+            f"requested_to={to_date.isoformat()} "
             f"timeframe={timeframe} sources={','.join(source_list)}"
         )
 
@@ -375,6 +410,15 @@ class MarketDataService:
             self._emit_progress(
                 "data_backfill_binance_universe_ready "
                 f"pairs={len(binance_pairs)} skipped={len(skipped_binance)}"
+            )
+
+        kraken_pairs: dict[str, str] = {}
+        if "kraken" in source_list:
+            kraken_pairs, skipped_kraken = self._resolve_kraken_pairs()
+            skipped_pairs.update({f"kraken:{k}": v for k, v in skipped_kraken.items()})
+            self._emit_progress(
+                "data_backfill_kraken_universe_ready "
+                f"pairs={len(kraken_pairs)} skipped={len(skipped_kraken)}"
             )
 
         symbol_summaries: list[SymbolBackfillSummary] = []
@@ -408,8 +452,8 @@ class MarketDataService:
                         instrument_id=entry.instrument_id,
                         status="error",
                         message=f"backfill_failed: {exc}",
-                        resume_from=from_date.isoformat(),
-                        requested_from=from_date.isoformat(),
+                        resume_from=(from_date.isoformat() if from_date is not None else "earliest"),
+                        requested_from=(from_date.isoformat() if from_date is not None else "earliest"),
                         requested_to=to_date.isoformat(),
                         chunk_count=0,
                         fetched_rows=0,
@@ -423,6 +467,45 @@ class MarketDataService:
                 self._emit_progress(
                     "symbol_backfill_complete "
                     f"source=ndax symbol={summary.symbol} status={summary.status} "
+                    f"rows={summary.row_count} rows_added={summary.rows_added} gaps={summary.gap_count}"
+                )
+
+        if "kraken" in source_list:
+            for ticker, pair_symbol in sorted(kraken_pairs.items()):
+                try:
+                    summary = self._backfill_kraken_symbol(
+                        ticker=ticker,
+                        pair_symbol=pair_symbol,
+                        from_date=from_date,
+                        to_date=to_date,
+                        interval_seconds=interval_seconds,
+                        timeframe=timeframe,
+                    )
+                except Exception as exc:
+                    errors += 1
+                    self._logger.exception("Kraken backfill failed symbol=%s", pair_symbol)
+                    summary = SymbolBackfillSummary(
+                        source="kraken",
+                        ticker=ticker,
+                        symbol=pair_symbol,
+                        instrument_id=0,
+                        status="error",
+                        message=f"backfill_failed: {exc}",
+                        resume_from=(from_date.isoformat() if from_date is not None else "earliest"),
+                        requested_from=(from_date.isoformat() if from_date is not None else "earliest"),
+                        requested_to=to_date.isoformat(),
+                        chunk_count=0,
+                        fetched_rows=0,
+                        row_count=0,
+                        rows_added=0,
+                        first_ts=None,
+                        last_ts=None,
+                        gap_count=0,
+                    )
+                symbol_summaries.append(summary)
+                self._emit_progress(
+                    "symbol_backfill_complete "
+                    f"source=kraken symbol={summary.symbol} status={summary.status} "
                     f"rows={summary.row_count} rows_added={summary.rows_added} gaps={summary.gap_count}"
                 )
 
@@ -447,8 +530,8 @@ class MarketDataService:
                         instrument_id=0,
                         status="error",
                         message=f"backfill_failed: {exc}",
-                        resume_from=from_date.isoformat(),
-                        requested_from=from_date.isoformat(),
+                        resume_from=(from_date.isoformat() if from_date is not None else "earliest"),
+                        requested_from=(from_date.isoformat() if from_date is not None else "earliest"),
                         requested_to=to_date.isoformat(),
                         chunk_count=0,
                         fetched_rows=0,
@@ -475,9 +558,9 @@ class MarketDataService:
             completed_at_utc=completed_at,
             timeframe=timeframe,
             interval_seconds=interval_seconds,
-            requested_from=from_date.isoformat(),
+            requested_from=_requested_from_label(from_date),
             requested_to=to_date.isoformat(),
-            mode="dual_source_backfill",
+            mode="multi_source_backfill",
             sources=list(source_list),
             symbols_total=len(symbol_summaries),
             symbols_processed=len(symbol_summaries),
@@ -489,13 +572,13 @@ class MarketDataService:
     def data_status(self, *, timeframe: str, dataset: str = "combined") -> DataStatusSummary | DataStatusAllSummary:
         interval_seconds = parse_timeframe_seconds(timeframe)
         dataset_key = dataset.strip().lower()
-        if dataset_key not in {"ndax", "binance", "combined", "all"}:
-            raise ValueError("dataset must be one of: ndax, binance, combined, all")
+        if dataset_key not in {"ndax", "kraken", "binance", "combined", "all"}:
+            raise ValueError("dataset must be one of: ndax, kraken, binance, combined, all")
 
         generated_at = _utc_now_iso()
         if dataset_key == "all":
             summaries: dict[str, DataStatusSummary] = {}
-            for key in ("ndax", "binance", "combined"):
+            for key in ("ndax", "kraken", "binance", "combined"):
                 summary = self._data_status_single(
                     timeframe=timeframe,
                     interval_seconds=interval_seconds,
@@ -536,43 +619,55 @@ class MarketDataService:
 
         targets = self._resolve_combined_targets()
         bridge_rows = self._load_ndax_bridge_rows(interval_seconds=interval_seconds)
-        shared_context = self._build_shared_conversion_context(
-            targets=targets,
+        selections: dict[str, _ExternalSelection | None] = {}
+        for ticker, ndax_symbol in targets:
+            selections[ndax_symbol] = self._select_external_candidate(
+                ticker=ticker,
+                ndax_symbol=ndax_symbol,
+                from_date=from_date,
+                to_date=to_date,
+                interval_seconds=interval_seconds,
+                bridge_rows=bridge_rows,
+            )
+        shared_contexts = self._build_shared_conversion_contexts(
+            selections=[item for item in selections.values() if item is not None],
             interval_seconds=interval_seconds,
             bridge_rows=bridge_rows,
         )
 
         symbol_summaries: list[CombinedSymbolSummary] = []
         errors = 0
-        for target in targets:
+        for ticker, ndax_symbol in targets:
             try:
                 summary = self._build_combined_symbol(
-                    ticker=target[0],
-                    ndax_symbol=target[1],
-                    binance_symbol=target[2],
+                    ticker=ticker,
+                    ndax_symbol=ndax_symbol,
                     from_date=from_date,
                     to_date=to_date,
                     timeframe=timeframe,
                     interval_seconds=interval_seconds,
-                    bridge_rows=bridge_rows,
-                    shared_context=shared_context,
+                    external_selection=selections.get(ndax_symbol),
+                    shared_contexts=shared_contexts,
                 )
             except Exception as exc:
                 errors += 1
-                self._logger.exception("Combined build failed symbol=%s", target[1])
+                self._logger.exception("Combined build failed symbol=%s", ndax_symbol)
                 summary = CombinedSymbolSummary(
-                    symbol=target[1],
-                    ticker=target[0],
+                    symbol=ndax_symbol,
+                    ticker=ticker,
                     status="error",
                     message=f"build_failed: {exc}",
                     ndax_rows=0,
-                    binance_rows=0,
+                    external_rows=0,
                     combined_rows=0,
                     gap_count=0,
                     ndax_share=0.0,
                     synth_share=0.0,
                     build_hash="",
-                    file_path=str(self._combined_symbol_path(target[1], interval_seconds=interval_seconds)),
+                    file_path=str(self._combined_symbol_path(ndax_symbol, interval_seconds=interval_seconds)),
+                    external_source="none",
+                    external_symbol=None,
+                    external_quote=None,
                 )
             symbol_summaries.append(summary)
             self._emit_progress(
@@ -580,6 +675,11 @@ class MarketDataService:
                 f"symbol={summary.symbol} status={summary.status} combined_rows={summary.combined_rows} "
                 f"gaps={summary.gap_count}"
             )
+
+        self._write_external_selection_manifest(
+            interval_seconds=interval_seconds,
+            selections=[item for item in selections.values() if item is not None],
+        )
 
         completed_at = _utc_now_iso()
         self._emit_progress(
@@ -629,32 +729,40 @@ class MarketDataService:
 
         interim_rows: list[tuple[CalibrationWeightRow, float]] = []
 
-        for ticker, ndax_symbol, binance_symbol in targets:
+        selections: dict[str, _ExternalSelection | None] = {}
+        for ticker, ndax_symbol in targets:
+            selections[ndax_symbol] = self._select_external_candidate(
+                ticker=ticker,
+                ndax_symbol=ndax_symbol,
+                from_date=from_date,
+                to_date=to_date,
+                interval_seconds=interval_seconds,
+                bridge_rows=bridge_rows,
+            )
+
+        for ticker, ndax_symbol in targets:
+            selection = selections.get(ndax_symbol)
             ndax_read = _read_market_records(
                 self._ndax_symbol_path(ndax_symbol, interval_seconds=interval_seconds),
                 interval_seconds=interval_seconds,
                 fallback_symbol=ndax_symbol,
                 fallback_source="ndax",
             )
-            binance_read = _read_market_records(
-                self._binance_symbol_path(binance_symbol, interval_seconds=interval_seconds),
-                interval_seconds=interval_seconds,
-                fallback_symbol=binance_symbol,
-                fallback_source="binance",
-            )
-            if not ndax_read.records and not binance_read.records:
+            external_records = selection.records if selection is not None else {}
+            if not ndax_read.records and not external_records:
                 continue
 
-            context = _build_conversion_context(
-                ndax_rows=ndax_read.records,
-                binance_rows=binance_read.records,
-                fx_rows=bridge_rows,
+            context = selection.context if selection is not None else _empty_conversion_context()
+            external_note = (
+                f"external_source={selection.source} external_symbol={selection.symbol} external_quote={selection.quote_currency}"
+                if selection is not None
+                else "external_source=none"
             )
 
             for month_key, start_ms, end_exclusive_ms, period_start_iso, period_end_iso in month_ranges:
                 metrics = _compute_overlap_metrics(
                     ndax_rows=ndax_read.records,
-                    binance_rows=binance_read.records,
+                    binance_rows=external_records,
                     context=context,
                     start_ms=start_ms,
                     end_exclusive_ms=end_exclusive_ms,
@@ -712,7 +820,7 @@ class MarketDataService:
                             supervised_eligible=False,
                             eligibility_mode="blocked",
                             anchor_month=None,
-                            report_note="pending_global_shrinkage",
+                            report_note=f"{external_note} pending_global_shrinkage",
                         ),
                         weight_raw,
                     )
@@ -728,7 +836,7 @@ class MarketDataService:
         for row, weight_raw in interim_rows:
             if (not row.quality_pass) or row.overlap_rows < self._config.min_overlap_rows_for_weight:
                 weight_final = 0.25
-                note = "fallback_quality_guardrail"
+                note = f"{row.report_note} fallback_quality_guardrail"
             else:
                 k = row.overlap_rows / (row.overlap_rows + 5000.0)
                 weight_final = _clamp(
@@ -736,7 +844,7 @@ class MarketDataService:
                     self._config.synth_weight_min,
                     self._config.synth_weight_max,
                 )
-                note = f"shrunk_by_overlap k={k:.4f}"
+                note = row.report_note.replace("pending_global_shrinkage", f"shrunk_by_overlap k={k:.4f}")
 
             finalized_row = CalibrationWeightRow(
                 symbol=row.symbol,
@@ -880,6 +988,11 @@ class MarketDataService:
                     anchor_month=eligible_row.anchor_month,
                 )
 
+        self._write_external_selection_manifest(
+            interval_seconds=interval_seconds,
+            selections=[item for item in selections.values() if item is not None],
+        )
+
         completed_at = _utc_now_iso()
         output_path = self._write_weight_report(
             run_id=run_id,
@@ -957,14 +1070,21 @@ class MarketDataService:
         self,
         *,
         entry: UniverseEntry,
-        from_date: date,
+        from_date: date | None,
         to_date: date,
         interval_seconds: int,
         timeframe: str,
     ) -> SymbolBackfillSummary:
         output_path = self._ndax_symbol_path(entry.ndax_symbol, interval_seconds=interval_seconds)
-        requested_from = from_date.isoformat()
+        requested_from = _requested_from_label(from_date)
         requested_to = to_date.isoformat()
+        effective_from = from_date or self._discover_ndax_earliest_date(
+            entry=entry,
+            interval_seconds=interval_seconds,
+            to_date=to_date,
+        )
+        if effective_from > to_date:
+            effective_from = to_date
 
         read_result = _read_market_records(
             output_path,
@@ -977,12 +1097,12 @@ class MarketDataService:
 
         missing_windows = _missing_date_windows(
             existing_timestamps=set(existing),
-            requested_from=from_date,
+            requested_from=effective_from,
             requested_to=to_date,
             interval_seconds=interval_seconds,
             max_window_days=_CHUNK_DAYS,
         )
-        resume_from = missing_windows[0][0] if missing_windows else from_date
+        resume_from = missing_windows[0][0] if missing_windows else effective_from
 
         chunk_count = 0
         fetched_rows = 0
@@ -1014,13 +1134,13 @@ class MarketDataService:
             _merge_records(
                 target=existing,
                 incoming=parsed,
-                from_date=from_date,
+                from_date=effective_from,
                 to_date=to_date,
             )
             _write_market_records_atomic(output_path, existing)
 
             in_range_timestamps = sorted(
-                _records_in_date_range(existing, from_date=from_date, to_date=to_date)
+                _records_in_date_range(existing, from_date=effective_from, to_date=to_date)
             )
             self._state_store.upsert_data_sync_checkpoint(
                 source="ndax",
@@ -1032,7 +1152,7 @@ class MarketDataService:
                 status="ok",
             )
 
-        in_range = _records_in_date_range(existing, from_date=from_date, to_date=to_date)
+        in_range = _records_in_date_range(existing, from_date=effective_from, to_date=to_date)
         timestamps = sorted(in_range)
         first_ts = timestamps[0] if timestamps else None
         last_ts = timestamps[-1] if timestamps else None
@@ -1041,7 +1161,7 @@ class MarketDataService:
         rows_added = max(0, len(existing) - old_count)
         coverage_pct = _coverage_pct_from_range(
             row_count=row_count,
-            requested_from=from_date,
+            requested_from=effective_from,
             requested_to=to_date,
             interval_seconds=interval_seconds,
         )
@@ -1095,15 +1215,23 @@ class MarketDataService:
         *,
         ticker: str,
         pair_symbol: str,
-        from_date: date,
+        from_date: date | None,
         to_date: date,
         interval_seconds: int,
         timeframe: str,
     ) -> SymbolBackfillSummary:
         client = self._ensure_binance_client()
         output_path = self._binance_symbol_path(pair_symbol, interval_seconds=interval_seconds)
-        requested_from = from_date.isoformat()
+        requested_from = _requested_from_label(from_date)
         requested_to = to_date.isoformat()
+        effective_from = from_date or self._discover_binance_earliest_date(
+            client=client,
+            pair_symbol=pair_symbol,
+            interval_seconds=interval_seconds,
+            to_date=to_date,
+        )
+        if effective_from > to_date:
+            effective_from = to_date
 
         read_result = _read_market_records(
             output_path,
@@ -1116,12 +1244,12 @@ class MarketDataService:
 
         missing_windows = _missing_date_windows(
             existing_timestamps=set(existing),
-            requested_from=from_date,
+            requested_from=effective_from,
             requested_to=to_date,
             interval_seconds=interval_seconds,
             max_window_days=_CHUNK_DAYS,
         )
-        resume_from = missing_windows[0][0] if missing_windows else from_date
+        resume_from = missing_windows[0][0] if missing_windows else effective_from
 
         chunk_count = 0
         fetched_rows = 0
@@ -1133,7 +1261,7 @@ class MarketDataService:
                 to_date=window_end,
                 interval_seconds=interval_seconds,
                 target=existing,
-                merge_from=from_date,
+                merge_from=effective_from,
                 merge_to=to_date,
             )
             chunk_count += pages
@@ -1141,7 +1269,7 @@ class MarketDataService:
 
             _write_market_records_atomic(output_path, existing)
             in_range_timestamps = sorted(
-                _records_in_date_range(existing, from_date=from_date, to_date=to_date)
+                _records_in_date_range(existing, from_date=effective_from, to_date=to_date)
             )
             self._state_store.upsert_data_sync_checkpoint(
                 source="binance",
@@ -1161,7 +1289,7 @@ class MarketDataService:
 
         repaired_rows = _repair_binance_outage_gaps(
             target=existing,
-            from_date=from_date,
+            from_date=effective_from,
             to_date=to_date,
             interval_seconds=interval_seconds,
             symbol=pair_symbol,
@@ -1173,7 +1301,7 @@ class MarketDataService:
                 f"source=binance symbol={pair_symbol} repaired_rows={repaired_rows}"
             )
 
-        in_range = _records_in_date_range(existing, from_date=from_date, to_date=to_date)
+        in_range = _records_in_date_range(existing, from_date=effective_from, to_date=to_date)
         timestamps = sorted(in_range)
         first_ts = timestamps[0] if timestamps else None
         last_ts = timestamps[-1] if timestamps else None
@@ -1182,7 +1310,7 @@ class MarketDataService:
         rows_added = max(0, len(existing) - old_count)
         coverage_pct = _coverage_pct_from_range(
             row_count=row_count,
-            requested_from=from_date,
+            requested_from=effective_from,
             requested_to=to_date,
             interval_seconds=interval_seconds,
         )
@@ -1206,6 +1334,199 @@ class MarketDataService:
         message = "backfill_complete" if row_count > 0 else "no_rows_returned_for_requested_range"
         return SymbolBackfillSummary(
             source="binance",
+            ticker=ticker,
+            symbol=pair_symbol,
+            instrument_id=0,
+            status=status,
+            message=message,
+            resume_from=resume_from.isoformat(),
+            requested_from=requested_from,
+            requested_to=requested_to,
+            chunk_count=chunk_count,
+            fetched_rows=fetched_rows,
+            row_count=row_count,
+            rows_added=rows_added,
+            first_ts=first_ts,
+            last_ts=last_ts,
+            gap_count=gap_count,
+        )
+
+    def _backfill_kraken_symbol(
+        self,
+        *,
+        ticker: str,
+        pair_symbol: str,
+        from_date: date | None,
+        to_date: date,
+        interval_seconds: int,
+        timeframe: str,
+    ) -> SymbolBackfillSummary:
+        client = self._ensure_kraken_client()
+        output_path = self._kraken_symbol_path(pair_symbol, interval_seconds=interval_seconds)
+        requested_from = _requested_from_label(from_date)
+        requested_to = to_date.isoformat()
+        effective_from = from_date or self._discover_kraken_earliest_date(pair_symbol=pair_symbol)
+        if effective_from > to_date:
+            effective_from = to_date
+
+        read_result = _read_market_records(
+            output_path,
+            interval_seconds=interval_seconds,
+            fallback_symbol=pair_symbol,
+            fallback_source="kraken",
+        )
+        existing = dict(read_result.records)
+        old_count = len(existing)
+
+        archive_path = self._config.kraken_archive_dir / f"{pair_symbol.upper()}.csv"
+        archive_last_dt = _kraken_archive_last_date(archive_path) if archive_path.exists() else None
+
+        chunk_count = 0
+        fetched_rows = 0
+        if archive_path.exists() and archive_last_dt is not None:
+            archive_to = min(to_date, archive_last_dt)
+            if effective_from <= archive_to:
+                parsed = _aggregate_kraken_archive_file(
+                    archive_path=archive_path,
+                    pair_symbol=pair_symbol,
+                    from_date=effective_from,
+                    to_date=archive_to,
+                    interval_seconds=interval_seconds,
+                )
+                _merge_records(
+                    target=existing,
+                    incoming=parsed,
+                    from_date=effective_from,
+                    to_date=to_date,
+                )
+                chunk_count += 1
+                fetched_rows += len(parsed)
+                _write_market_records_atomic(output_path, existing)
+                in_range_timestamps = sorted(
+                    _records_in_date_range(existing, from_date=effective_from, to_date=to_date)
+                )
+                self._state_store.upsert_data_sync_checkpoint(
+                    source="kraken",
+                    symbol=pair_symbol,
+                    timeframe=timeframe,
+                    requested_from=requested_from,
+                    requested_to=requested_to,
+                    last_success_ts=in_range_timestamps[-1] if in_range_timestamps else None,
+                    status="ok",
+                )
+                self._emit_progress(
+                    "symbol_archive_seed "
+                    f"source=kraken symbol={pair_symbol} from={effective_from.isoformat()} "
+                    f"to={archive_to.isoformat()} fetched_rows={len(parsed)}"
+                )
+
+        api_from = effective_from
+        if archive_last_dt is not None:
+            api_from = max(api_from, archive_last_dt + timedelta(days=1))
+
+        missing_windows = (
+            _missing_date_windows(
+                existing_timestamps=set(existing),
+                requested_from=api_from,
+                requested_to=to_date,
+                interval_seconds=interval_seconds,
+                max_window_days=_CHUNK_DAYS,
+            )
+            if api_from <= to_date
+            else []
+        )
+        resume_from = missing_windows[0][0] if missing_windows else effective_from
+
+        last_flushed_chunk = 0
+        for idx, (window_start, window_end) in enumerate(missing_windows, start=1):
+            pages, api_rows = self._fetch_kraken_window(
+                client=client,
+                symbol=pair_symbol,
+                from_date=window_start,
+                to_date=window_end,
+                interval_seconds=interval_seconds,
+                target=existing,
+                merge_from=effective_from,
+                merge_to=to_date,
+            )
+
+            chunk_count += max(1, pages)
+            fetched_rows += api_rows
+            should_flush = (
+                pages > 0
+                or idx == len(missing_windows)
+                or (idx - last_flushed_chunk) >= _KRAKEN_FLUSH_EVERY_CHUNKS
+            )
+            if should_flush:
+                _write_market_records_atomic(output_path, existing)
+                in_range_timestamps = sorted(
+                    _records_in_date_range(existing, from_date=effective_from, to_date=to_date)
+                )
+                self._state_store.upsert_data_sync_checkpoint(
+                    source="kraken",
+                    symbol=pair_symbol,
+                    timeframe=timeframe,
+                    requested_from=requested_from,
+                    requested_to=requested_to,
+                    last_success_ts=in_range_timestamps[-1] if in_range_timestamps else None,
+                    status="ok",
+                )
+                last_flushed_chunk = idx
+            self._emit_progress(
+                "symbol_chunk "
+                f"source=kraken symbol={pair_symbol} chunk={idx}/{len(missing_windows)} "
+                f"chunk_from={window_start.isoformat()} chunk_to={window_end.isoformat()} pages={pages} "
+                f"fetched_rows={api_rows}"
+            )
+
+        repaired_rows = _repair_external_outage_gaps(
+            target=existing,
+            from_date=effective_from,
+            to_date=to_date,
+            interval_seconds=interval_seconds,
+            symbol=pair_symbol,
+            source=_KRAKEN_GAP_FILL_SOURCE,
+        )
+        if repaired_rows > 0:
+            _write_market_records_atomic(output_path, existing)
+            self._emit_progress(
+                "symbol_gap_repair "
+                f"source=kraken symbol={pair_symbol} repaired_rows={repaired_rows}"
+            )
+
+        in_range = _records_in_date_range(existing, from_date=effective_from, to_date=to_date)
+        timestamps = sorted(in_range)
+        first_ts = timestamps[0] if timestamps else None
+        last_ts = timestamps[-1] if timestamps else None
+        gap_count = _count_gaps(timestamps=timestamps, interval_seconds=interval_seconds)
+        row_count = len(timestamps)
+        rows_added = max(0, len(existing) - old_count)
+        coverage_pct = _coverage_pct_from_range(
+            row_count=row_count,
+            requested_from=effective_from,
+            requested_to=to_date,
+            interval_seconds=interval_seconds,
+        )
+
+        self._state_store.upsert_data_coverage_v2(
+            dataset="kraken",
+            symbol=pair_symbol,
+            timeframe=timeframe,
+            first_ts=first_ts,
+            last_ts=last_ts,
+            row_count=row_count,
+            gap_count=gap_count,
+            duplicate_count=read_result.duplicate_count,
+            misaligned_count=read_result.misaligned_count,
+            coverage_pct=coverage_pct,
+            ndax_share=0.0,
+            synth_share=1.0 if row_count > 0 else 0.0,
+        )
+
+        status = "ok" if row_count > 0 else "empty"
+        message = "backfill_complete" if row_count > 0 else "no_rows_returned_for_requested_range"
+        return SymbolBackfillSummary(
+            source="kraken",
             ticker=ticker,
             symbol=pair_symbol,
             instrument_id=0,
@@ -1291,6 +1612,56 @@ class MarketDataService:
 
         return pages, fetched_rows
 
+    def _fetch_kraken_window(
+        self,
+        *,
+        client: KrakenClient,
+        symbol: str,
+        from_date: date,
+        to_date: date,
+        interval_seconds: int,
+        target: dict[int, dict[str, Any]],
+        merge_from: date,
+        merge_to: date,
+    ) -> tuple[int, int]:
+        start_ms = _date_start_ms(from_date)
+        end_exclusive_ms = _date_end_exclusive_ms(to_date)
+        since_ns = start_ms * 1_000_000
+        pages = 0
+        fetched_rows = 0
+        max_iterations = 50000
+
+        while pages < max_iterations:
+            rows, last_token = client.get_trades(pair=symbol, since_ns=since_ns)
+            pages += 1
+            fetched_rows += len(rows)
+            if not rows:
+                break
+
+            parsed = _aggregate_kraken_trade_rows(
+                rows=rows,
+                symbol=symbol,
+                interval_seconds=interval_seconds,
+                start_ms=start_ms,
+                end_exclusive_ms=end_exclusive_ms,
+            )
+            if parsed:
+                _merge_records(
+                    target=target,
+                    incoming=parsed,
+                    from_date=merge_from,
+                    to_date=merge_to,
+                )
+
+            last_trade_ms = _max_kraken_trade_ts_ms(rows)
+            if last_trade_ms is not None and last_trade_ms >= end_exclusive_ms - 1:
+                break
+            if last_token is None or last_token <= since_ns:
+                break
+            since_ns = last_token
+
+        return pages, fetched_rows
+
     def _data_status_single(
         self,
         *,
@@ -1345,6 +1716,40 @@ class MarketDataService:
                     interval_seconds=interval_seconds,
                 )
 
+        elif dataset == "kraken":
+            mode = "kraken_archive"
+            pairs, skipped = self._resolve_kraken_pairs()
+            skipped_pairs = {f"kraken:{k}": v for k, v in skipped.items()}
+            for _, pair_symbol in sorted(pairs.items()):
+                symbols.append(
+                    self._coverage_for_symbol(
+                        dataset=dataset,
+                        symbol=pair_symbol,
+                        timeframe=timeframe,
+                        interval_seconds=interval_seconds,
+                    )
+                )
+            for ticker, reason in sorted(skipped.items()):
+                symbols.append(
+                    SymbolCoverageSummary(
+                        dataset=dataset,
+                        symbol=ticker,
+                        status="no_pair",
+                        row_count=0,
+                        first_ts=None,
+                        last_ts=None,
+                        gap_count=0,
+                        duplicate_count=0,
+                        misaligned_count=0,
+                        coverage_pct=0.0,
+                        ndax_share=0.0,
+                        synth_share=0.0,
+                        timeframe=timeframe,
+                        file_path="",
+                        note=reason,
+                    )
+                )
+
         elif dataset == "binance":
             mode = "binance_universe"
             pairs, skipped = self._resolve_binance_pairs()
@@ -1383,7 +1788,7 @@ class MarketDataService:
             mode = "combined_dataset"
             targets = self._resolve_combined_targets()
             if targets:
-                for _, ndax_symbol, _ in targets:
+                for _, ndax_symbol in targets:
                     symbols.append(
                         self._coverage_for_symbol(
                             dataset=dataset,
@@ -1534,7 +1939,7 @@ class MarketDataService:
         if dataset == "ndax":
             ndax_share = 1.0
             synth_share = 0.0
-        elif dataset == "binance":
+        elif dataset in {"binance", "kraken", "external"}:
             ndax_share = 0.0
             synth_share = 1.0
         else:
@@ -1634,22 +2039,40 @@ class MarketDataService:
             return filtered, skipped
         return pairs, skipped
 
-    def _resolve_combined_targets(self) -> list[tuple[str, str, str]]:
-        quote = self._config.binance_quote.upper()
+    def _resolve_kraken_pairs(self) -> tuple[dict[str, str], dict[str, str]]:
+        archive_dir = self._config.kraken_archive_dir
+        available = {path.stem.upper() for path in archive_dir.glob("*.csv")} if archive_dir.exists() else set()
+        pairs: dict[str, str] = {}
+        skipped: dict[str, str] = {}
+        for ticker in UNIVERSE_V1_COINS:
+            prefix = _kraken_base_prefix(ticker)
+            selected: str | None = None
+            for quote in _KRAKEN_QUOTE_PRIORITY:
+                candidate = f"{prefix}{quote}"
+                if candidate in available:
+                    selected = candidate
+                    break
+            if selected is None:
+                skipped[ticker] = "no_kraken_supported_quote_pair"
+            else:
+                pairs[ticker] = selected
+        return pairs, skipped
+
+    def _resolve_combined_targets(self) -> list[tuple[str, str]]:
         try:
             instruments = self._ndax_client.get_instruments()
             resolution = resolve_tradable_universe(instruments)
             return [
-                (entry.ticker, entry.ndax_symbol, f"{entry.ticker}{quote}")
+                (entry.ticker, entry.ndax_symbol)
                 for entry in resolution.tradable
             ]
         except NdaxError:
             base = self._ndax_base_path(interval_seconds=900)
-            targets: list[tuple[str, str, str]] = []
+            targets: list[tuple[str, str]] = []
             for file_path in sorted(base.glob("*.parquet")):
                 ndax_symbol = file_path.stem.upper()
                 ticker = ndax_symbol[:-3] if ndax_symbol.endswith("CAD") else ndax_symbol
-                targets.append((ticker, ndax_symbol, f"{ticker}{quote}"))
+                targets.append((ticker, ndax_symbol))
             return targets
 
     def _load_ndax_bridge_rows(self, *, interval_seconds: int) -> dict[int, dict[str, Any]]:
@@ -1663,61 +2086,150 @@ class MarketDataService:
             fallback_source="ndax",
         ).records
 
-    def _build_shared_conversion_context(
+    def _build_shared_conversion_contexts(
         self,
         *,
-        targets: list[tuple[str, str, str]],
+        selections: list[_ExternalSelection],
         interval_seconds: int,
         bridge_rows: dict[int, dict[str, Any]],
-    ) -> _ConversionContext:
-        ratio_by_month_values: dict[str, list[float]] = {}
-        basis_by_month_values: dict[str, list[float]] = {}
-        fx_series = _fx_series_from_rows(bridge_rows)
-        fx_map = {ts: price for ts, price in fx_series}
+    ) -> dict[str, _ConversionContext]:
+        grouped_ratio_values: dict[str, dict[str, list[float]]] = {}
+        grouped_basis_values: dict[str, dict[str, list[float]]] = {}
+        grouped_fx_values: dict[str, dict[int, float]] = {}
 
-        for _, ndax_symbol, binance_symbol in targets:
+        for selection in selections:
+            quote_group = _quote_group(selection.quote_currency)
+            ratio_by_month_values = grouped_ratio_values.setdefault(quote_group, {})
+            basis_by_month_values = grouped_basis_values.setdefault(quote_group, {})
             ndax_rows = _read_market_records(
-                self._ndax_symbol_path(ndax_symbol, interval_seconds=interval_seconds),
+                self._ndax_symbol_path(selection.ndax_symbol, interval_seconds=interval_seconds),
                 interval_seconds=interval_seconds,
-                fallback_symbol=ndax_symbol,
+                fallback_symbol=selection.ndax_symbol,
                 fallback_source="ndax",
             ).records
-            binance_rows = _read_market_records(
-                self._binance_symbol_path(binance_symbol, interval_seconds=interval_seconds),
-                interval_seconds=interval_seconds,
-                fallback_symbol=binance_symbol,
-                fallback_source="binance",
-            ).records
+            external_rows = selection.records
+            candidate_bridge_rows = _bridge_rows_for_quote(
+                quote_currency=selection.quote_currency,
+                source_rows=external_rows,
+                bridge_rows=bridge_rows,
+            )
+            fx_series = _fx_series_from_rows(candidate_bridge_rows)
+            fx_values = grouped_fx_values.setdefault(quote_group, {})
+            for ts, price in fx_series:
+                fx_values[ts] = price
+            fx_map = {ts: price for ts, price in fx_series}
             _collect_conversion_observations(
                 ndax_rows=ndax_rows,
-                binance_rows=binance_rows,
+                binance_rows=external_rows,
                 fx_map=fx_map,
                 ratio_by_month_values=ratio_by_month_values,
                 basis_by_month_values=basis_by_month_values,
             )
 
-        return _finalize_conversion_context(
-            ratio_by_month_values=ratio_by_month_values,
-            basis_by_month_values=basis_by_month_values,
-            fx_series=fx_series,
+        contexts: dict[str, _ConversionContext] = {}
+        for quote_group, ratio_by_month_values in grouped_ratio_values.items():
+            contexts[quote_group] = _finalize_conversion_context(
+                ratio_by_month_values=ratio_by_month_values,
+                basis_by_month_values=grouped_basis_values.get(quote_group, {}),
+                fx_series=sorted(grouped_fx_values.get(quote_group, {}).items()),
+            )
+        return contexts
+
+    def _select_external_candidate(
+        self,
+        *,
+        ticker: str,
+        ndax_symbol: str,
+        from_date: date,
+        to_date: date,
+        interval_seconds: int,
+        bridge_rows: dict[int, dict[str, Any]],
+    ) -> _ExternalSelection | None:
+        ndax_rows = _records_in_date_range(
+            _read_market_records(
+                self._ndax_symbol_path(ndax_symbol, interval_seconds=interval_seconds),
+                interval_seconds=interval_seconds,
+                fallback_symbol=ndax_symbol,
+                fallback_source="ndax",
+            ).records,
+            from_date=from_date,
+            to_date=to_date,
         )
+        candidates = self._external_candidates_for_ticker(ticker=ticker, interval_seconds=interval_seconds)
+        if not candidates:
+            return None
+
+        start_ms = _date_start_ms(from_date)
+        end_exclusive_ms = _date_end_exclusive_ms(to_date)
+        best_choice: tuple[tuple[int, float, int, int], _ExternalSelection] | None = None
+        for candidate in candidates:
+            read_result = _read_market_records(
+                candidate.path,
+                interval_seconds=interval_seconds,
+                fallback_symbol=candidate.symbol,
+                fallback_source=candidate.source,
+            )
+            candidate_rows = _records_in_date_range(read_result.records, from_date=from_date, to_date=to_date)
+            if not candidate_rows:
+                continue
+            candidate_bridge_rows = _bridge_rows_for_quote(
+                quote_currency=candidate.quote_currency,
+                source_rows=candidate_rows,
+                bridge_rows=bridge_rows,
+            )
+            context = _build_conversion_context(
+                ndax_rows=ndax_rows,
+                binance_rows=candidate_rows,
+                fx_rows=candidate_bridge_rows,
+            )
+            metrics = _compute_overlap_metrics(
+                ndax_rows=ndax_rows,
+                binance_rows=candidate_rows,
+                context=context,
+                start_ms=start_ms,
+                end_exclusive_ms=end_exclusive_ms,
+                min_overlap_rows=self._config.min_overlap_rows_for_weight,
+                max_median_ape=self._config.conversion_max_median_ape,
+            )
+            selection = _ExternalSelection(
+                ticker=ticker,
+                ndax_symbol=ndax_symbol,
+                source=candidate.source,
+                symbol=candidate.symbol,
+                quote_currency=candidate.quote_currency,
+                path=candidate.path,
+                records=read_result.records,
+                context=context,
+                overlap_metrics=metrics,
+            )
+            score_key = (
+                1 if metrics.quality_pass else 0,
+                round(metrics.quality_score, 9),
+                metrics.overlap_rows,
+                -candidate.priority_rank,
+            )
+            if best_choice is None or score_key > best_choice[0]:
+                best_choice = (score_key, selection)
+
+        if best_choice is None:
+            return None
+        return best_choice[1]
 
     def _build_combined_symbol(
         self,
         *,
         ticker: str,
         ndax_symbol: str,
-        binance_symbol: str,
         from_date: date,
         to_date: date,
         timeframe: str,
         interval_seconds: int,
-        bridge_rows: dict[int, dict[str, Any]],
-        shared_context: _ConversionContext,
+        external_selection: _ExternalSelection | None,
+        shared_contexts: dict[str, _ConversionContext],
     ) -> CombinedSymbolSummary:
         ndax_path = self._ndax_symbol_path(ndax_symbol, interval_seconds=interval_seconds)
-        binance_path = self._binance_symbol_path(binance_symbol, interval_seconds=interval_seconds)
         output_path = self._combined_symbol_path(ndax_symbol, interval_seconds=interval_seconds)
+        external_output_path = self._external_symbol_path(ndax_symbol, interval_seconds=interval_seconds)
 
         ndax_all = _read_market_records(
             ndax_path,
@@ -1725,27 +2237,66 @@ class MarketDataService:
             fallback_symbol=ndax_symbol,
             fallback_source="ndax",
         ).records
-        binance_all = _read_market_records(
-            binance_path,
-            interval_seconds=interval_seconds,
-            fallback_symbol=binance_symbol,
-            fallback_source="binance",
-        ).records
+        external_all = external_selection.records if external_selection is not None else {}
+        bridge_rows = self._load_ndax_bridge_rows(interval_seconds=interval_seconds)
 
         ndax_rows = _records_in_date_range(ndax_all, from_date=from_date, to_date=to_date)
-        binance_rows = _records_in_date_range(binance_all, from_date=from_date, to_date=to_date)
-        fx_rows = _records_in_date_range(bridge_rows, from_date=from_date, to_date=to_date)
+        external_rows = _records_in_date_range(external_all, from_date=from_date, to_date=to_date)
+        binance_fallback_all: dict[int, dict[str, Any]] = {}
+        binance_fallback_rows: dict[int, dict[str, Any]] = {}
+        quote_group = _quote_group(external_selection.quote_currency) if external_selection is not None else "USD"
+        if external_selection is not None:
+            primary_bridge_rows = _bridge_rows_for_quote(
+                quote_currency=external_selection.quote_currency,
+                source_rows=external_rows,
+                bridge_rows=bridge_rows,
+            )
+            primary_context = _build_conversion_context(
+                ndax_rows=ndax_rows,
+                binance_rows=external_rows,
+                fx_rows=primary_bridge_rows,
+            )
+            primary_fallback_context = shared_contexts.get(quote_group)
+            _write_market_records_atomic(external_output_path, external_all)
+        else:
+            primary_context = _empty_conversion_context()
+            primary_fallback_context = None
 
-        context = _build_conversion_context(
-            ndax_rows=ndax_rows,
-            binance_rows=binance_rows,
-            fx_rows=fx_rows,
-        )
+        if external_selection is None or external_selection.source != "binance":
+            binance_symbol = f"{ticker}{self._config.binance_quote.upper()}"
+            binance_path = self._binance_symbol_path(binance_symbol, interval_seconds=interval_seconds)
+            if binance_path.exists():
+                binance_fallback_all = _read_market_records(
+                    binance_path,
+                    interval_seconds=interval_seconds,
+                    fallback_symbol=binance_symbol,
+                    fallback_source="binance",
+                ).records
+                binance_fallback_rows = _records_in_date_range(
+                    binance_fallback_all,
+                    from_date=from_date,
+                    to_date=to_date,
+                )
+        binance_fallback_context = _empty_conversion_context()
+        binance_fallback_shared_context = None
+        if binance_fallback_rows:
+            fallback_bridge_rows = _bridge_rows_for_quote(
+                quote_currency=self._config.binance_quote.upper(),
+                source_rows=binance_fallback_rows,
+                bridge_rows=bridge_rows,
+            )
+            binance_fallback_context = _build_conversion_context(
+                ndax_rows=ndax_rows,
+                binance_rows=binance_fallback_rows,
+                fx_rows=fallback_bridge_rows,
+            )
+            binance_fallback_shared_context = shared_contexts.get(
+                _quote_group(self._config.binance_quote.upper())
+            )
 
         combined: dict[int, dict[str, Any]] = {}
         ndax_count = 0
         synth_count = 0
-        missing_count = 0
         for ts in _iter_expected_timestamps(from_date=from_date, to_date=to_date, interval_seconds=interval_seconds):
             ndax_row = ndax_rows.get(ts)
             if ndax_row is not None:
@@ -1755,29 +2306,51 @@ class MarketDataService:
                 ndax_count += 1
                 continue
 
-            binance_row = binance_rows.get(ts)
-            if binance_row is None:
-                missing_count += 1
-                continue
+            selected_external_row: dict[str, Any] | None = None
 
-            factor = _conversion_factor(ts=ts, context=context, fallback_context=shared_context)
-            if factor is None or factor <= 0:
-                missing_count += 1
-                continue
+            primary_row = external_rows.get(ts)
+            if primary_row is not None:
+                factor = _conversion_factor(
+                    ts=ts,
+                    context=primary_context,
+                    fallback_context=primary_fallback_context,
+                )
+                if factor is not None and factor > 0:
+                    selected_external_row = primary_row
+                else:
+                    factor = None
+            else:
+                factor = None
+
+            if selected_external_row is None:
+                fallback_row = binance_fallback_rows.get(ts)
+                if fallback_row is None:
+                    continue
+                factor = _conversion_factor(
+                    ts=ts,
+                    context=binance_fallback_context,
+                    fallback_context=binance_fallback_shared_context,
+                )
+                if factor is None or factor <= 0:
+                    continue
+                selected_external_row = fallback_row
+
+            assert selected_external_row is not None
+            assert factor is not None
 
             synthetic_source = (
                 _SYNTHETIC_GAP_FILL_SOURCE
-                if _is_gap_fill_source(binance_row.get("source"))
+                if _is_gap_fill_source(selected_external_row.get("source"))
                 else "synthetic"
             )
 
             converted = {
                 "timestamp_ms": ts,
-                "open": float(binance_row["open"]) * factor,
-                "high": float(binance_row["high"]) * factor,
-                "low": float(binance_row["low"]) * factor,
-                "close": float(binance_row["close"]) * factor,
-                "volume": float(binance_row["volume"]),
+                "open": float(selected_external_row["open"]) * factor,
+                "high": float(selected_external_row["high"]) * factor,
+                "low": float(selected_external_row["low"]) * factor,
+                "close": float(selected_external_row["close"]) * factor,
+                "volume": float(selected_external_row["volume"]),
                 "inside_bid": 0.0,
                 "inside_ask": 0.0,
                 "instrument_id": 0,
@@ -1806,10 +2379,11 @@ class MarketDataService:
             from_ts=_date_start_ms(from_date),
             to_ts=_date_end_exclusive_ms(to_date) - interval_seconds * 1000,
             ndax_rows=len(ndax_rows),
-            binance_rows=len(binance_rows),
+            external_rows=len(set(external_rows) | set(binance_fallback_rows)),
             combined_rows=combined_rows,
             gap_count=gap_count,
             build_hash=build_hash,
+            external_source=(external_selection.source if external_selection is not None else "none"),
         )
 
         coverage_pct = (
@@ -1853,13 +2427,16 @@ class MarketDataService:
             status=status,
             message=message,
             ndax_rows=len(ndax_rows),
-            binance_rows=len(binance_rows),
+            external_rows=len(set(external_rows) | set(binance_fallback_rows)),
             combined_rows=combined_rows,
             gap_count=gap_count,
             ndax_share=ndax_share,
             synth_share=synth_share,
             build_hash=build_hash,
             file_path=str(output_path),
+            external_source=(external_selection.source if external_selection is not None else "none"),
+            external_symbol=(external_selection.symbol if external_selection is not None else None),
+            external_quote=(external_selection.quote_currency if external_selection is not None else None),
         )
 
     def _write_coverage_report(self, *, dataset: str, payload: dict[str, object]) -> None:
@@ -1874,6 +2451,94 @@ class MarketDataService:
         output_file.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return output_file
 
+    def _write_external_selection_manifest(
+        self,
+        *,
+        interval_seconds: int,
+        selections: list[_ExternalSelection],
+    ) -> None:
+        output_path = self._external_base_path(interval_seconds=interval_seconds) / "selection.json"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "generated_at_utc": _utc_now_iso(),
+            "interval_seconds": interval_seconds,
+            "selections": {
+                item.ndax_symbol: {
+                    "ticker": item.ticker,
+                    "source": item.source,
+                    "symbol": item.symbol,
+                    "quote_currency": item.quote_currency,
+                    "overlap_rows": item.overlap_metrics.overlap_rows,
+                    "quality_score": item.overlap_metrics.quality_score,
+                    "quality_pass": item.overlap_metrics.quality_pass,
+                }
+                for item in sorted(selections, key=lambda current: current.ndax_symbol)
+            },
+        }
+        output_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    def _discover_binance_earliest_date(
+        self,
+        *,
+        client: BinanceClient,
+        pair_symbol: str,
+        interval_seconds: int,
+        to_date: date,
+    ) -> date:
+        rows = client.get_klines(
+            symbol=pair_symbol,
+            interval=_binance_interval(interval_seconds),
+            start_time_ms=0,
+            end_time_ms=_date_end_exclusive_ms(to_date) - 1,
+            limit=1,
+        )
+        if not rows:
+            return to_date
+        parsed = _parse_binance_rows(rows=rows, symbol=pair_symbol, interval_seconds=interval_seconds)
+        if not parsed:
+            return to_date
+        first_ts = min(parsed)
+        return datetime.fromtimestamp(first_ts / 1000, tz=timezone.utc).date()
+
+    def _discover_ndax_earliest_date(
+        self,
+        *,
+        entry: UniverseEntry,
+        interval_seconds: int,
+        to_date: date,
+    ) -> date:
+        anchor = date(2018, 1, 1)
+        current = anchor
+        best: date | None = None
+        while current <= to_date:
+            window_end = min(to_date, current + timedelta(days=_CHUNK_DAYS - 1))
+            rows = self._ndax_client.get_ticker_history(
+                instrument_id=entry.instrument_id,
+                interval_seconds=interval_seconds,
+                from_date=current,
+                to_date=window_end,
+            )
+            if rows:
+                parsed = _parse_ndax_rows(
+                    rows=rows,
+                    symbol=entry.ndax_symbol,
+                    instrument_id=entry.instrument_id,
+                    interval_seconds=interval_seconds,
+                )
+                if parsed:
+                    first_ts = min(parsed)
+                    return datetime.fromtimestamp(first_ts / 1000, tz=timezone.utc).date()
+                best = current
+                break
+            current = window_end + timedelta(days=1)
+        return best or to_date
+
+    def _discover_kraken_earliest_date(self, *, pair_symbol: str) -> date:
+        archive_path = self._config.kraken_archive_dir / f"{pair_symbol.upper()}.csv"
+        if not archive_path.exists():
+            return date.today()
+        return _kraken_archive_first_date(archive_path)
+
     def _emit_progress(self, message: str) -> None:
         if self._progress_callback is not None:
             self._progress_callback(message)
@@ -1887,13 +2552,26 @@ class MarketDataService:
             )
         return self._binance_client
 
+    def _ensure_kraken_client(self) -> KrakenClient:
+        if self._kraken_client is None:
+            self._kraken_client = KrakenClient(
+                base_url=self._config.kraken_base_url,
+                timeout_seconds=self._config.ndax_timeout_seconds,
+                max_retries=self._config.ndax_max_retries,
+            )
+        return self._kraken_client
+
     def _dataset_base_path(self, *, dataset: str, interval_seconds: int) -> Path:
         timeframe_dir = _timeframe_dir(interval_seconds)
         data_root = self._config.runtime_dir.parent / "data"
         if dataset == "ndax":
             return data_root / "raw" / "ndax" / timeframe_dir
+        if dataset == "kraken":
+            return data_root / "raw" / "kraken" / timeframe_dir
         if dataset == "binance":
             return data_root / "raw" / "binance" / timeframe_dir
+        if dataset == "external":
+            return data_root / "raw" / "external" / timeframe_dir
         if dataset == "combined":
             return data_root / "combined" / timeframe_dir
         raise ValueError(f"Unsupported dataset: {dataset}")
@@ -1907,6 +2585,12 @@ class MarketDataService:
     def _binance_base_path(self, *, interval_seconds: int) -> Path:
         return self._dataset_base_path(dataset="binance", interval_seconds=interval_seconds)
 
+    def _kraken_base_path(self, *, interval_seconds: int) -> Path:
+        return self._dataset_base_path(dataset="kraken", interval_seconds=interval_seconds)
+
+    def _external_base_path(self, *, interval_seconds: int) -> Path:
+        return self._dataset_base_path(dataset="external", interval_seconds=interval_seconds)
+
     def _combined_base_path(self, *, interval_seconds: int) -> Path:
         return self._dataset_base_path(dataset="combined", interval_seconds=interval_seconds)
 
@@ -1916,8 +2600,45 @@ class MarketDataService:
     def _binance_symbol_path(self, symbol: str, *, interval_seconds: int) -> Path:
         return self._binance_base_path(interval_seconds=interval_seconds) / f"{symbol.upper()}.parquet"
 
+    def _kraken_symbol_path(self, symbol: str, *, interval_seconds: int) -> Path:
+        return self._kraken_base_path(interval_seconds=interval_seconds) / f"{symbol.upper()}.parquet"
+
+    def _external_symbol_path(self, symbol: str, *, interval_seconds: int) -> Path:
+        return self._external_base_path(interval_seconds=interval_seconds) / f"{symbol.upper()}.parquet"
+
     def _combined_symbol_path(self, symbol: str, *, interval_seconds: int) -> Path:
         return self._combined_base_path(interval_seconds=interval_seconds) / f"{symbol.upper()}.parquet"
+
+    def _external_candidates_for_ticker(self, *, ticker: str, interval_seconds: int) -> list[_ExternalCandidate]:
+        candidates: list[_ExternalCandidate] = []
+        priority_order = {name: idx for idx, name in enumerate(self._config.external_source_priority)}
+        if "kraken" in priority_order:
+            kraken_pairs, _ = self._resolve_kraken_pairs()
+            pair_symbol = kraken_pairs.get(ticker)
+            if pair_symbol is not None:
+                candidates.append(
+                    _ExternalCandidate(
+                        source="kraken",
+                        symbol=pair_symbol,
+                        quote_currency=_quote_currency_from_pair(pair_symbol),
+                        path=self._kraken_symbol_path(pair_symbol, interval_seconds=interval_seconds),
+                        priority_rank=priority_order["kraken"],
+                    )
+                )
+        if "binance" in priority_order:
+            quote = self._config.binance_quote.upper()
+            pair_symbol = f"{ticker}{quote}"
+            candidates.append(
+                _ExternalCandidate(
+                    source="binance",
+                    symbol=pair_symbol,
+                    quote_currency=quote,
+                    path=self._binance_symbol_path(pair_symbol, interval_seconds=interval_seconds),
+                    priority_rank=priority_order["binance"],
+                )
+            )
+        candidates.sort(key=lambda item: (item.priority_rank, item.source, item.symbol))
+        return candidates
 
 
 def _utc_now_iso() -> str:
@@ -1946,13 +2667,245 @@ def _normalize_sources(sources: Iterable[str]) -> tuple[str, ...]:
         value = str(item).strip().lower()
         if not value:
             continue
-        if value not in {"ndax", "binance"}:
+        if value not in {"ndax", "kraken", "binance"}:
             raise ValueError(f"Unsupported data source: {item}")
         if value not in normalized:
             normalized.append(value)
     if not normalized:
         raise ValueError("At least one data source must be specified.")
     return tuple(normalized)
+
+
+def _requested_from_label(value: date | None) -> str:
+    return value.isoformat() if value is not None else "earliest"
+
+
+def _kraken_base_prefix(ticker: str) -> str:
+    return _KRAKEN_PREFIX_OVERRIDES.get(ticker.upper(), ticker.upper())
+
+
+def _quote_currency_from_pair(symbol: str) -> str:
+    upper = symbol.upper()
+    for quote in sorted(_KRAKEN_SUPPORTED_QUOTES + ("EUR", "GBP", "AUD"), key=len, reverse=True):
+        if upper.endswith(quote):
+            return quote
+    if upper.endswith("USDC"):
+        return "USDC"
+    return upper[-3:]
+
+
+def _quote_group(quote_currency: str) -> str:
+    quote = quote_currency.upper()
+    if quote == "CAD":
+        return "CAD"
+    return "USD"
+
+
+def _empty_conversion_context() -> _ConversionContext:
+    return _ConversionContext(
+        ratio_by_month={},
+        basis_by_month={},
+        global_ratio=None,
+        global_basis=None,
+        fx_series=[],
+        fx_timestamps=[],
+    )
+
+
+def _bridge_rows_for_quote(
+    *,
+    quote_currency: str,
+    source_rows: dict[int, dict[str, Any]],
+    bridge_rows: dict[int, dict[str, Any]],
+) -> dict[int, dict[str, Any]]:
+    quote = quote_currency.upper()
+    if quote == "CAD":
+        return {
+            ts: {
+                "timestamp_ms": ts,
+                "open": 1.0,
+                "high": 1.0,
+                "low": 1.0,
+                "close": 1.0,
+                "volume": 0.0,
+                "inside_bid": 1.0,
+                "inside_ask": 1.0,
+                "instrument_id": 0,
+                "symbol": "CADCAD",
+                "interval_seconds": int(row.get("interval_seconds", 900) or 900),
+                "source": "fx_constant",
+            }
+            for ts, row in source_rows.items()
+        }
+    return bridge_rows
+
+
+def _parse_kraken_trade_fields(row: list[Any]) -> tuple[int, float, float] | None:
+    if len(row) < 3:
+        return None
+    try:
+        price = float(row[0])
+        volume = float(row[1])
+        raw_ts = float(row[2])
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(price) and math.isfinite(volume) and math.isfinite(raw_ts)):
+        return None
+    if price <= 0 or volume < 0 or raw_ts <= 0:
+        return None
+    ts_ms = int(raw_ts * 1000)
+    return ts_ms, price, volume
+
+
+def _aggregate_kraken_trade_rows(
+    *,
+    rows: list[list[Any]],
+    symbol: str,
+    interval_seconds: int,
+    start_ms: int,
+    end_exclusive_ms: int,
+) -> dict[int, dict[str, Any]]:
+    aggregated: dict[int, dict[str, Any]] = {}
+    interval_ms = interval_seconds * 1000
+    for row in rows:
+        parsed = _parse_kraken_trade_fields(row)
+        if parsed is None:
+            continue
+        ts_ms, price, volume = parsed
+        if ts_ms < start_ms or ts_ms >= end_exclusive_ms:
+            continue
+        bucket_ts = ((ts_ms // interval_ms) * interval_ms) + interval_ms
+        if bucket_ts < start_ms or bucket_ts >= end_exclusive_ms:
+            continue
+        current = aggregated.get(bucket_ts)
+        if current is None:
+            aggregated[bucket_ts] = {
+                "timestamp_ms": bucket_ts,
+                "open": price,
+                "high": price,
+                "low": price,
+                "close": price,
+                "volume": volume,
+                "inside_bid": 0.0,
+                "inside_ask": 0.0,
+                "instrument_id": 0,
+                "symbol": symbol.upper(),
+                "interval_seconds": int(interval_seconds),
+                "source": "kraken",
+            }
+        else:
+            current["high"] = max(float(current["high"]), price)
+            current["low"] = min(float(current["low"]), price)
+            current["close"] = price
+            current["volume"] = float(current["volume"]) + volume
+    return aggregated
+
+
+def _aggregate_kraken_archive_file(
+    *,
+    archive_path: Path,
+    pair_symbol: str,
+    from_date: date,
+    to_date: date,
+    interval_seconds: int,
+) -> dict[int, dict[str, Any]]:
+    start_ms = _date_start_ms(from_date)
+    end_exclusive_ms = _date_end_exclusive_ms(to_date)
+    aggregated: dict[int, dict[str, Any]] = {}
+    interval_ms = interval_seconds * 1000
+    with archive_path.open("r", encoding="utf-8", newline="") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(",")
+            if len(parts) < 3:
+                continue
+            try:
+                raw_ts = float(parts[0])
+                price = float(parts[1])
+                volume = float(parts[2])
+            except ValueError:
+                continue
+            if not (math.isfinite(raw_ts) and math.isfinite(price) and math.isfinite(volume)):
+                continue
+            ts_ms = int(raw_ts * 1000)
+            if ts_ms < start_ms:
+                continue
+            if ts_ms >= end_exclusive_ms:
+                break
+            bucket_ts = ((ts_ms // interval_ms) * interval_ms) + interval_ms
+            if bucket_ts < start_ms or bucket_ts >= end_exclusive_ms:
+                continue
+            current = aggregated.get(bucket_ts)
+            if current is None:
+                aggregated[bucket_ts] = {
+                    "timestamp_ms": bucket_ts,
+                    "open": price,
+                    "high": price,
+                    "low": price,
+                    "close": price,
+                    "volume": volume,
+                    "inside_bid": 0.0,
+                    "inside_ask": 0.0,
+                    "instrument_id": 0,
+                    "symbol": pair_symbol.upper(),
+                    "interval_seconds": int(interval_seconds),
+                    "source": "kraken",
+                }
+            else:
+                current["high"] = max(float(current["high"]), price)
+                current["low"] = min(float(current["low"]), price)
+                current["close"] = price
+                current["volume"] = float(current["volume"]) + volume
+    return aggregated
+
+
+def _max_kraken_trade_ts_ms(rows: list[list[Any]]) -> int | None:
+    timestamps = []
+    for row in rows:
+        parsed = _parse_kraken_trade_fields(row)
+        if parsed is not None:
+            timestamps.append(parsed[0])
+    return max(timestamps) if timestamps else None
+
+
+def _kraken_archive_first_date(path: Path) -> date:
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(",")
+            if not parts:
+                continue
+            try:
+                ts_value = float(parts[0])
+            except ValueError:
+                continue
+            return datetime.fromtimestamp(ts_value, tz=timezone.utc).date()
+    return date.today()
+
+
+def _kraken_archive_last_date(path: Path) -> date:
+    with path.open("rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            return date.today()
+        position = handle.tell() - 1
+        buffer = bytearray()
+        while position >= 0:
+            handle.seek(position)
+            chunk = handle.read(1)
+            if chunk == b"\n" and buffer:
+                break
+            if chunk not in {b"\n", b"\r"}:
+                buffer.extend(chunk)
+            position -= 1
+        line = bytes(reversed(buffer)).decode("utf-8")
+    parts = line.split(",")
+    ts_value = float(parts[0])
+    return datetime.fromtimestamp(ts_value, tz=timezone.utc).date()
 
 
 def _find_ndax_entry(instruments: list[dict[str, Any]], symbol: str) -> UniverseEntry | None:
@@ -2646,7 +3599,11 @@ def _finalize_conversion_context(
 
 
 def _is_gap_fill_source(source: Any) -> bool:
-    return str(source).strip().lower() in {_BINANCE_GAP_FILL_SOURCE, _SYNTHETIC_GAP_FILL_SOURCE}
+    return str(source).strip().lower() in {
+        _BINANCE_GAP_FILL_SOURCE,
+        _KRAKEN_GAP_FILL_SOURCE,
+        _SYNTHETIC_GAP_FILL_SOURCE,
+    }
 
 
 def _repair_binance_outage_gaps(
@@ -2656,6 +3613,25 @@ def _repair_binance_outage_gaps(
     to_date: date,
     interval_seconds: int,
     symbol: str,
+) -> int:
+    return _repair_external_outage_gaps(
+        target=target,
+        from_date=from_date,
+        to_date=to_date,
+        interval_seconds=interval_seconds,
+        symbol=symbol,
+        source=_BINANCE_GAP_FILL_SOURCE,
+    )
+
+
+def _repair_external_outage_gaps(
+    *,
+    target: dict[int, dict[str, Any]],
+    from_date: date,
+    to_date: date,
+    interval_seconds: int,
+    symbol: str,
+    source: str,
 ) -> int:
     timestamps = sorted(_records_in_date_range(target, from_date=from_date, to_date=to_date))
     if len(timestamps) <= 1:
@@ -2683,7 +3659,7 @@ def _repair_binance_outage_gaps(
                 "instrument_id": 0,
                 "symbol": symbol.upper(),
                 "interval_seconds": int(interval_seconds),
-                "source": _BINANCE_GAP_FILL_SOURCE,
+                "source": source,
             }
             repaired += 1
             missing_ts += step

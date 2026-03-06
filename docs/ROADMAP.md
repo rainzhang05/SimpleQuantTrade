@@ -5,7 +5,7 @@ This roadmap is the canonical architecture and contract for the active system.
 Active direction:
 - NDAX execution venue (spot, CAD budget safety)
 - 15m ML-oriented data pipeline
-- dual-source training dataset (`ndax + binance`) with deterministic CAD normalization
+- multi-source training dataset (`ndax + kraken primary + binance fallback`) with deterministic CAD normalization
 - conservative operational safety shell retained from legacy runtime
 
 Legacy fixed-rule 1m EMA/ATR behavior is archived at:
@@ -38,8 +38,14 @@ Legacy fixed-rule 1m EMA/ATR behavior is archived at:
 
 ### 1.1 Data layer (implemented core)
 - Raw NDAX candles: `data/raw/ndax/15m/<SYMBOL>.parquet`
+- Raw Kraken candles: `data/raw/kraken/15m/<PAIR>.parquet`
+  - imported deterministically from local Kraken trade-history CSV plus paged REST trade top-up after archive end
+  - exchange/ingest outage windows are sealed deterministically with carry-forward 15m rows (`source=kraken_gap_fill`, zero volume)
 - Raw Binance candles: `data/raw/binance/15m/<SYMBOL>USDT.parquet`
   - exchange-wide outage windows are sealed deterministically with carry-forward 15m rows (`source=binance_gap_fill`, zero volume)
+- Selected external context bars: `data/raw/external/15m/<SYMBOL>.parquet`
+  - primary external-context cache for the deterministic preferred external source per symbol
+- External-source selection manifest: `data/raw/external/15m/selection.json`
 - Combined CAD dataset: `data/combined/15m/<SYMBOL>.parquet`
 - Runtime metadata/state DB: `runtime/state.sqlite`
 - Runtime controls/logs: `runtime/control.json`, `runtime/logs/`
@@ -109,11 +115,12 @@ BTC/ETH lock policy:
   - state-transition entries/exits only
   - `max_new_entries_per_cycle`
 
-## 5) Dual-Source Data System (Implemented)
+## 5) Multi-Source Data System (Implemented)
 
 ### 5.1 Sources
 - NDAX public candles (CAD pairs, execution-aligned data).
-- Binance spot candles (`<COIN>USDT`) for historical structure and continuity.
+- Kraken historical trade archive + REST trade top-up for the preferred external pair per symbol.
+- Binance spot candles (`<COIN>USDT`) retained as deterministic fallback when Kraken is unavailable or not selected.
 
 ### 5.2 Deterministic ingestion behavior
 - Boundary-safe chunking.
@@ -122,9 +129,9 @@ BTC/ETH lock policy:
 - Resume via missing-window detection (not only high-water mark).
 - Idempotent reruns.
 
-### 5.3 Binance -> CAD normalization
-For overlap timestamps where NDAX and Binance are both present:
-- `R_t = NDAX_close_t / BINANCE_close_t`
+### 5.3 External -> CAD normalization
+For overlap timestamps where NDAX and the selected external source are both present:
+- `R_t = NDAX_close_t / EXTERNAL_close_t`
 - If NDAX `USDTCAD` exists, compute basis proxy `B_t = R_t / USDTCAD_t`
 - Use robust monthly medians (clipped) for ratio/basis estimation.
 - Conversion factor selection per timestamp:
@@ -138,16 +145,18 @@ For overlap timestamps where NDAX and Binance are both present:
 ### 5.4 Combined precedence
 Per symbol/timestamp:
 1. Use NDAX row when present.
-2. Else use normalized Binance CAD row.
-3. Else mark missing.
+2. Else use normalized CAD row from the selected external source.
+3. If the selected external source is missing a timestamp, use normalized Binance fallback for that timestamp when available.
+4. Else mark missing.
 
 Operational interpretation:
 - raw NDAX history may remain empty or internally gapped for some listed instruments when NDAX does not return candles for those windows.
+- raw Kraken history may lag after the archive end because REST trade top-up is slower than archive import; combined completeness is still preserved by deterministic Binance timestamp fallback where Kraken has not been topped up yet.
 - training and readiness gates evaluate the `combined` dataset contract, not raw NDAX completeness.
-- combined completeness is achieved by deterministic normalized-Binance substitution wherever NDAX bars are absent.
+- combined completeness is achieved by deterministic normalized external substitution wherever NDAX bars are absent.
 
 Combined source tagging:
-- regular normalized Binance rows use `source=synthetic`
+- regular normalized external rows use `source=synthetic`
 - normalized gap-repair rows use `source=synthetic_gap_fill`
 
 ### 5.5 Combined health contract
@@ -273,7 +282,7 @@ Training artifact layout:
 - `runtime/research/training/<RUN_ID>/models/per_coin/<SYMBOL>/<scenario>/fold_<NN>.txt`
 
 Feature contract (implemented v1):
-- fixed 56-feature historical-only spec from combined rows plus raw NDAX/Binance context
+- fixed 56-feature historical-only spec from combined rows plus raw NDAX/external context
 - missing raw-source context is imputed to `0.0` and paired with availability flags
 - exact feature schema is versioned in `feature_spec.json`
 
@@ -337,14 +346,14 @@ Bundle integrity failure behavior:
 - `staging-validate`, `cutover-checklist`
 
 ### 11.2 Data commands (implemented)
-- `qtbot data-backfill --from YYYY-MM-DD --to YYYY-MM-DD --timeframe 15m --sources ndax,binance`
-- `qtbot data-status --timeframe 15m --dataset ndax|binance|combined|all`
+- `qtbot data-backfill --from YYYY-MM-DD|earliest --to YYYY-MM-DD --timeframe 15m --sources ndax,kraken,binance`
+- `qtbot data-status --timeframe 15m --dataset ndax|kraken|binance|combined|all`
 - `qtbot data-build-combined --from YYYY-MM-DD --to YYYY-MM-DD --timeframe 15m`
 - `qtbot data-calibrate-weights --from YYYY-MM-DD --to YYYY-MM-DD --timeframe 15m --refresh monthly`
 - `qtbot data-weight-status --timeframe 15m`
 
 Defaults:
-- `data-backfill` sources default to `ndax,binance`
+- `data-backfill` sources default to `ndax,kraken,binance`
 - `data-status` dataset default to `combined`
 
 ### 11.3 Snapshot command (implemented)
@@ -362,7 +371,7 @@ Defaults:
 
 ## 12) SQLite Schema Contract
 
-Active dual-source tables:
+Active multi-source tables:
 - `data_sync_checkpoints`
 - `data_coverage_v2`
 - `conversion_quality`
@@ -385,10 +394,13 @@ Schema rules:
 
 ## 13) Config Surface
 
-Required dual-source variables:
-- `QTBOT_DATA_SOURCES=ndax,binance`
+Required data variables:
+- `QTBOT_DATA_SOURCES=ndax,kraken,binance`
 - `QTBOT_DATASET_MODE=combined`
 - `QTBOT_BINANCE_BASE_URL=https://api.binance.com`
+- `QTBOT_KRAKEN_BASE_URL=https://api.kraken.com`
+- `QTBOT_KRAKEN_ARCHIVE_DIR=data/kraken`
+- `QTBOT_EXTERNAL_SOURCE_PRIORITY=kraken,binance`
 - `QTBOT_BINANCE_QUOTE=USDT`
 - `QTBOT_BRIDGE_FX_SYMBOL=USDTCAD`
 - `QTBOT_SYNTH_WEIGHT_MIN=0.20`

@@ -192,14 +192,41 @@ class TrainingFeatureBuilderTests(unittest.TestCase):
                     handle,
                 )
 
+            external_rows = [
+                {"timestamp_ms": _ts_ms(2026, 1, 1, 0, 0), "open": 50.0, "high": 50.0, "low": 50.0, "close": 50.0, "symbol": "BTCUSDT", "source": "binance"},
+                {"timestamp_ms": _ts_ms(2026, 1, 1, 0, 15), "open": 55.0, "high": 55.0, "low": 55.0, "close": 55.0, "symbol": "BTCUSDT", "source": "binance"},
+                {"timestamp_ms": _ts_ms(2026, 1, 1, 0, 30), "open": 45.0, "high": 45.0, "low": 45.0, "close": 45.0, "symbol": "BTCUSDT", "source": "binance"},
+                {"timestamp_ms": _ts_ms(2026, 1, 1, 0, 45), "open": 47.5, "high": 47.5, "low": 47.5, "close": 47.5, "symbol": "BTCUSDT", "source": "binance"},
+            ]
             _write_market_rows(
                 root / "data" / "raw" / "binance" / "15m" / "BTCUSDT.parquet",
-                [
-                    {"timestamp_ms": _ts_ms(2026, 1, 1, 0, 0), "open": 50.0, "high": 50.0, "low": 50.0, "close": 50.0, "symbol": "BTCUSDT", "source": "binance"},
-                    {"timestamp_ms": _ts_ms(2026, 1, 1, 0, 15), "open": 55.0, "high": 55.0, "low": 55.0, "close": 55.0, "symbol": "BTCUSDT", "source": "binance"},
-                    {"timestamp_ms": _ts_ms(2026, 1, 1, 0, 30), "open": 45.0, "high": 45.0, "low": 45.0, "close": 45.0, "symbol": "BTCUSDT", "source": "binance"},
-                    {"timestamp_ms": _ts_ms(2026, 1, 1, 0, 45), "open": 47.5, "high": 47.5, "low": 47.5, "close": 47.5, "symbol": "BTCUSDT", "source": "binance"},
-                ],
+                external_rows,
+            )
+            _write_market_rows(
+                root / "data" / "raw" / "external" / "15m" / "BTCCAD.parquet",
+                external_rows,
+            )
+            selection_path = root / "data" / "raw" / "external" / "15m" / "selection.json"
+            selection_path.parent.mkdir(parents=True, exist_ok=True)
+            selection_path.write_text(
+                json.dumps(
+                    {
+                        "generated_at_utc": "2026-03-06T00:00:00+00:00",
+                        "interval_seconds": 900,
+                        "selections": {
+                            "BTCCAD": {
+                                "ticker": "BTC",
+                                "source": "binance",
+                                "symbol": "BTCUSDT",
+                                "quote_currency": "USDT",
+                            }
+                        },
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
             )
             _write_market_rows(
                 root / "data" / "raw" / "ndax" / "15m" / "BTCCAD.parquet",
@@ -231,7 +258,7 @@ class TrainingFeatureBuilderTests(unittest.TestCase):
             self.assertAlmostEqual(float(second_row["combined_ret_1"]), 0.10, places=6)
             self.assertEqual(float(second_row["ndax_ctx_available"]), 0.0)
             self.assertEqual(float(second_row["ndax_ret_1"]), 0.0)
-            self.assertEqual(float(second_row["binance_ctx_available"]), 1.0)
+            self.assertEqual(float(second_row["external_ctx_available"]), 1.0)
 
 
 if __name__ == "__main__":

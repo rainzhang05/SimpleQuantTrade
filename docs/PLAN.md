@@ -1,4 +1,4 @@
-# Execution Plan: NDAX + Binance Unified ML 15m Upgrade
+# Execution Plan: NDAX + Kraken/Binance Unified ML 15m Upgrade
 
 This is the step-by-step delivery plan from current runtime to fully usable production-grade ML runtime.
 
@@ -55,7 +55,7 @@ Required evidence package for final production readiness:
 ## 1) Phase 0: Docs and Contract Freeze
 
 ### Deliverables
-- Canonical roadmap rewritten for dual-source data architecture.
+- Canonical roadmap rewritten for multi-source data architecture.
 - CLI/config/storage/DB contracts frozen.
 - Legacy system moved to explicit archive reference.
 - Repository distribution contract fixed: `data/` remains local-only and is regenerated per machine.
@@ -104,7 +104,7 @@ Required evidence package for final production readiness:
 - dedupe/idempotency
 
 ### Acceptance gate
-- `data-backfill --sources ndax,binance` succeeds deterministically on fixture windows.
+- `data-backfill --sources ndax,kraken,binance` succeeds deterministically on fixture windows.
 
 ## 4) Phase 3: Combined Dataset Builder
 
@@ -113,6 +113,7 @@ Required evidence package for final production readiness:
 - Binance->CAD normalization bridge using NDAX overlap and `USDTCAD` when available.
 - Shared universe-level CAD conversion fallback when symbol-local overlap is absent.
 - Deterministic precedence merge: NDAX first, synthetic fallback.
+- Deterministic timestamp-level Binance fallback when the preferred external source is selected but missing specific timestamps.
 - Combined build hash and build audit records.
 
 ### Module boundaries
@@ -289,7 +290,7 @@ Active universe note:
 ## 11) Migration Path: Legacy Runtime -> ML Runtime
 
 1. Keep existing lifecycle and risk shell unchanged.
-2. Build and validate dual-source dataset pipeline.
+2. Build and validate multi-source dataset pipeline.
 3. Switch training inputs to combined weighted dataset.
 4. Promote first ML bundle via deterministic gates.
 5. Activate ML inference path in observe-only.
@@ -303,7 +304,7 @@ CI must validate:
 - docker lifecycle checks
 
 Workflow command checks target:
-- `data-backfill --sources ndax,binance` (fixture/mocked environment)
+- `data-backfill --sources ndax,kraken,binance` (fixture/mocked environment)
 - `data-build-combined`
 - `data-calibrate-weights`
 - `data-status --dataset combined`

@@ -1338,34 +1338,57 @@ class StateStore:
         from_ts: int,
         to_ts: int,
         ndax_rows: int,
-        binance_rows: int,
+        external_rows: int,
         combined_rows: int,
         gap_count: int,
         build_hash: str,
+        external_source: str = "binance",
     ) -> None:
         now = utc_now_iso()
         with self._connect() as conn:
             self._apply_schema(conn)
-            conn.execute(
-                """
-                INSERT INTO combined_builds (
-                    symbol, timeframe, from_ts, to_ts, ndax_rows, binance_rows,
-                    combined_rows, gap_count, build_hash, updated_at_utc
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    symbol.strip().upper(),
-                    timeframe.strip().lower(),
-                    int(from_ts),
-                    int(to_ts),
-                    int(ndax_rows),
-                    int(binance_rows),
+            columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(combined_builds)").fetchall()
+            }
+            values: list[object] = [
+                symbol.strip().upper(),
+                timeframe.strip().lower(),
+                int(from_ts),
+                int(to_ts),
+                int(ndax_rows),
+            ]
+            insert_columns = ["symbol", "timeframe", "from_ts", "to_ts", "ndax_rows"]
+            if "binance_rows" in columns:
+                insert_columns.append("binance_rows")
+                values.append(int(external_rows))
+            insert_columns.extend(
+                [
+                    "external_rows",
+                    "combined_rows",
+                    "gap_count",
+                    "build_hash",
+                    "external_source",
+                    "updated_at_utc",
+                ]
+            )
+            values.extend(
+                [
+                    int(external_rows),
                     int(combined_rows),
                     int(gap_count),
                     build_hash,
+                    external_source.strip().lower(),
                     now,
-                ),
+                ]
+            )
+            placeholders = ", ".join("?" for _ in insert_columns)
+            conn.execute(
+                f"""
+                INSERT INTO combined_builds ({", ".join(insert_columns)})
+                VALUES ({placeholders})
+                """,
+                tuple(values),
             )
 
     @contextmanager
@@ -1564,13 +1587,26 @@ class StateStore:
                 from_ts INTEGER NOT NULL,
                 to_ts INTEGER NOT NULL,
                 ndax_rows INTEGER NOT NULL,
-                binance_rows INTEGER NOT NULL,
+                external_rows INTEGER NOT NULL DEFAULT 0,
                 combined_rows INTEGER NOT NULL,
                 gap_count INTEGER NOT NULL,
                 build_hash TEXT NOT NULL,
+                external_source TEXT NOT NULL DEFAULT 'binance',
                 updated_at_utc TEXT NOT NULL
             )
             """
+        )
+        self._ensure_column(
+            conn,
+            table_name="combined_builds",
+            column_name="external_rows",
+            ddl="ALTER TABLE combined_builds ADD COLUMN external_rows INTEGER NOT NULL DEFAULT 0",
+        )
+        self._ensure_column(
+            conn,
+            table_name="combined_builds",
+            column_name="external_source",
+            ddl="ALTER TABLE combined_builds ADD COLUMN external_source TEXT NOT NULL DEFAULT 'binance'",
         )
         conn.execute(
             """

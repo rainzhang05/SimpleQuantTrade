@@ -79,15 +79,28 @@ class CliTests(unittest.TestCase):
                 "--timeframe",
                 "15m",
                 "--sources",
-                "ndax,binance",
+                "ndax,kraken,binance",
             ]
         )
         self.assertEqual(args.command, "data-backfill")
         self.assertEqual(args.from_date, "2026-01-01")
         self.assertEqual(args.to_date, "2026-03-05")
         self.assertEqual(args.timeframe, "15m")
-        self.assertEqual(args.sources, "ndax,binance")
+        self.assertEqual(args.sources, "ndax,kraken,binance")
         self.assertFalse(args.quiet)
+
+    def test_parser_accepts_data_backfill_earliest_start(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "data-backfill",
+                "--from",
+                "earliest",
+                "--to",
+                "2026-03-05",
+            ]
+        )
+        self.assertEqual(args.from_date, "earliest")
 
     def test_parser_accepts_data_backfill_quiet_flag(self) -> None:
         parser = build_parser()

@@ -125,7 +125,7 @@ class CliHandlerTests(unittest.TestCase):
                             "--to",
                             "2026-01-03",
                             "--sources",
-                            "ndax,binance",
+                            "ndax,kraken,binance",
                         ]
                     ),
                     0,
@@ -383,7 +383,7 @@ class CliHandlerTests(unittest.TestCase):
                     from_date="2026-01-01",
                     to_date="2026-01-31",
                     timeframe="15m",
-                    sources="ndax,binance",
+                    sources="ndax,kraken,binance",
                 )
             self.assertEqual(code, 0)
             self.assertEqual(err, "")
@@ -391,6 +391,21 @@ class CliHandlerTests(unittest.TestCase):
             self.assertEqual(payload["timeframe"], "15m")
             self.assertIn("progress_log_file", payload)
             service.backfill.assert_called_once()
+
+            service.reset_mock()
+            service.backfill.side_effect = None
+            service.backfill.return_value = summary
+            with mock.patch("qtbot.cli._make_data_service", return_value=service):
+                code, _, _ = _capture_output(
+                    cli._handle_data_backfill,
+                    config=cfg,
+                    from_date="earliest",
+                    to_date="2026-01-31",
+                    timeframe="15m",
+                    sources="kraken",
+                )
+            self.assertEqual(code, 0)
+            self.assertIsNone(service.backfill.call_args.kwargs["from_date"])
 
             service.backfill.side_effect = ValueError("bad window")
             code, _, err = _capture_output(

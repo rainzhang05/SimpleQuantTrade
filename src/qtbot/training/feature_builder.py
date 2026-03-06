@@ -43,6 +43,7 @@ class FeatureBuilder:
         self._repo_root = repo_root
         self._data_root = repo_root / "data"
         self._fx_series_cache: pd.Series | None = None
+        self._external_selection_cache: dict[str, dict[str, object]] | None = None
 
     def build(self, *, snapshot_id: str) -> FeatureBuildResult:
         snapshot_dir = self._data_root / "snapshots" / snapshot_id
@@ -138,22 +139,27 @@ class FeatureBuilder:
             features[f"synthetic_share_{window}"] = combined_is_synthetic.rolling(window, min_periods=1).mean()
             features[f"gap_fill_count_{window}"] = is_gap_fill.rolling(window, min_periods=1).sum()
 
-        raw_binance = self._read_close_series(self._data_root / "raw" / "binance" / "15m" / f"{ticker}USDT.parquet")
+        external_meta = self._external_selection().get(symbol, {})
+        external_quote = str(external_meta.get("quote_currency", "USD")).upper()
+        raw_external = self._read_close_series(self._data_root / "raw" / "external" / "15m" / f"{symbol}.parquet")
         raw_ndax = self._read_close_series(self._data_root / "raw" / "ndax" / "15m" / f"{symbol}.parquet")
         fx_series = self._fx_series()
 
         timestamp_values = frame["timestamp_ms"].astype("int64").to_numpy()
-        binance_close = pd.Series(raw_binance.reindex(timestamp_values).to_numpy(), index=frame.index, dtype="float64")
+        external_close = pd.Series(raw_external.reindex(timestamp_values).to_numpy(), index=frame.index, dtype="float64")
         ndax_close = pd.Series(raw_ndax.reindex(timestamp_values).to_numpy(), index=frame.index, dtype="float64")
-        fx_close = pd.Series(fx_series.reindex(timestamp_values).to_numpy(), index=frame.index, dtype="float64")
+        if external_quote == "CAD":
+            fx_close = pd.Series(np.ones(len(frame.index)), index=frame.index, dtype="float64")
+        else:
+            fx_close = pd.Series(fx_series.reindex(timestamp_values).to_numpy(), index=frame.index, dtype="float64")
 
-        binance_ret_1 = _return(binance_close, 1)
-        features["binance_ret_1"] = binance_ret_1
-        features["binance_ret_4"] = _return(binance_close, 4)
-        features["binance_ret_16"] = _return(binance_close, 16)
-        features["binance_vol_1"] = binance_ret_1.abs()
-        features["binance_vol_4"] = binance_ret_1.rolling(4, min_periods=4).std(ddof=0)
-        features["binance_vol_16"] = binance_ret_1.rolling(16, min_periods=16).std(ddof=0)
+        external_ret_1 = _return(external_close, 1)
+        features["external_ret_1"] = external_ret_1
+        features["external_ret_4"] = _return(external_close, 4)
+        features["external_ret_16"] = _return(external_close, 16)
+        features["external_vol_1"] = external_ret_1.abs()
+        features["external_vol_4"] = external_ret_1.rolling(4, min_periods=4).std(ddof=0)
+        features["external_vol_16"] = external_ret_1.rolling(16, min_periods=16).std(ddof=0)
 
         features["ndax_ret_1"] = _return(ndax_close, 1)
         features["ndax_ret_4"] = _return(ndax_close, 4)
@@ -163,13 +169,13 @@ class FeatureBuilder:
         features["ndax_present_4"] = ndax_present.rolling(4, min_periods=1).mean()
         features["ndax_present_16"] = ndax_present.rolling(16, min_periods=1).mean()
 
-        basis = ndax_close / (binance_close * fx_close)
-        basis = basis.where((ndax_close > 0) & (binance_close > 0) & (fx_close > 0))
+        basis = ndax_close / (external_close * fx_close)
+        basis = basis.where((ndax_close > 0) & (external_close > 0) & (fx_close > 0))
         features["basis_level"] = basis
         basis_mean = basis.rolling(96, min_periods=96).mean()
         basis_std = basis.rolling(96, min_periods=96).std(ddof=0)
         features["basis_zscore_96"] = (basis - basis_mean) / basis_std.replace(0.0, np.nan)
-        features["binance_ctx_available"] = binance_close.notna().astype("float64")
+        features["external_ctx_available"] = external_close.notna().astype("float64")
         features["ndax_ctx_available"] = ndax_close.notna().astype("float64")
         features["basis_available"] = basis.notna().astype("float64")
 
@@ -215,6 +221,20 @@ class FeatureBuilder:
         if self._fx_series_cache is None:
             self._fx_series_cache = self._read_close_series(self._data_root / "raw" / "ndax" / "15m" / "USDTCAD.parquet")
         return self._fx_series_cache
+
+    def _external_selection(self) -> dict[str, dict[str, object]]:
+        if self._external_selection_cache is None:
+            path = self._data_root / "raw" / "external" / "15m" / "selection.json"
+            if not path.exists():
+                self._external_selection_cache = {}
+            else:
+                with path.open("r", encoding="utf-8") as handle:
+                    payload = json.load(handle)
+                self._external_selection_cache = {
+                    str(symbol): dict(meta)
+                    for symbol, meta in payload.get("selections", {}).items()
+                }
+        return self._external_selection_cache
 
     @staticmethod
     def _read_close_series(path: Path) -> pd.Series:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -243,6 +244,22 @@ class _FakeBinanceClientCarryForward:
         return filtered[:limit]
 
 
+class _FakeKrakenClient:
+    def __init__(self) -> None:
+        self.trade_calls = 0
+
+    def get_trades(self, *, pair: str, since_ns: int | None = None):
+        self.trade_calls += 1
+        return [], since_ns
+
+
+def _write_kraken_archive(path: Path, rows: list[tuple[int, float, float]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        for ts_ms, price, volume in rows:
+            handle.write(f"{ts_ms / 1000:.3f},{price:.8f},{volume:.8f}\n")
+
+
 class DataServiceTests(unittest.TestCase):
     def test_parse_timeframe_seconds(self) -> None:
         self.assertEqual(parse_timeframe_seconds("15m"), 900)
@@ -383,6 +400,86 @@ class DataServiceTests(unittest.TestCase):
             self.assertEqual(len(repaired), 3)
             self.assertTrue(all(float(row["volume"]) == 0.0 for row in repaired))
 
+    def test_backfill_imports_kraken_archive_from_earliest(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cfg = make_runtime_config(root)
+            rows: list[tuple[int, float, float]] = []
+            for idx in range(96 * 2):
+                ts = _ts_ms(2026, 1, 1, 0, 0) + (idx * 900_000) + 60_000
+                rows.append((ts, 100.0 + idx, 1.0))
+            _write_kraken_archive(root / "data" / "kraken" / "XBTCAD.csv", rows)
+
+            store = StateStore(cfg.state_db)
+            fake_kraken = _FakeKrakenClient()
+            service = MarketDataService(
+                config=cfg,
+                ndax_client=_FakeNdaxClient(),
+                kraken_client=fake_kraken,
+                state_store=store,
+            )
+
+            summary = service.backfill(
+                from_date=None,
+                to_date=date(2026, 1, 2),
+                timeframe="15m",
+                sources=["kraken"],
+            )
+
+            btc = next(item for item in summary.symbols if item.symbol == "XBTCAD")
+            self.assertEqual(btc.requested_from, "earliest")
+            self.assertEqual(btc.row_count, (96 * 2) - 1)
+            self.assertEqual(fake_kraken.trade_calls, 0)
+            btc_file = root / "data" / "raw" / "kraken" / "15m" / "XBTCAD.parquet"
+            self.assertTrue(btc_file.exists())
+            status = service.data_status(timeframe="15m", dataset="kraken")
+            btc_status = next(item for item in status.symbols if item.symbol == "XBTCAD")
+            self.assertEqual(btc_status.gap_count, 0)
+
+    def test_build_combined_prefers_kraken_when_quality_is_better(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cfg = make_runtime_config(root)
+            store = StateStore(cfg.state_db)
+            service = MarketDataService(
+                config=cfg,
+                ndax_client=_FakeNdaxClient(),
+                binance_client=_FakeBinanceClient(),
+                kraken_client=_FakeKrakenClient(),
+                state_store=store,
+            )
+
+            service.backfill(
+                from_date=date(2026, 1, 1),
+                to_date=date(2026, 1, 3),
+                timeframe="15m",
+                sources=["ndax", "binance"],
+            )
+            archive_rows: list[tuple[int, float, float]] = []
+            for row in _generate_15m_rows(start_ts_ms=_ts_ms(2026, 1, 1, 0, 0), periods=96 * 3, instrument_id=0):
+                ts_ms = int(row[0]) + 60_000
+                archive_rows.append((ts_ms, float(row[4]), 1.0))
+            _write_kraken_archive(root / "data" / "kraken" / "XBTCAD.csv", archive_rows)
+            service.backfill(
+                from_date=date(2026, 1, 1),
+                to_date=date(2026, 1, 3),
+                timeframe="15m",
+                sources=["kraken"],
+            )
+
+            combined = service.build_combined(
+                from_date=date(2026, 1, 1),
+                to_date=date(2026, 1, 3),
+                timeframe="15m",
+            )
+
+            btc = next(item for item in combined.symbols if item.symbol == "BTCCAD")
+            self.assertEqual(btc.external_source, "kraken")
+            self.assertEqual(btc.external_symbol, "XBTCAD")
+            selection = json.loads((root / "data" / "raw" / "external" / "15m" / "selection.json").read_text(encoding="utf-8"))
+            self.assertEqual(selection["selections"]["BTCCAD"]["source"], "kraken")
+            self.assertTrue((root / "data" / "raw" / "external" / "15m" / "BTCCAD.parquet").exists())
+
     def test_build_combined_uses_shared_conversion_context_for_empty_ndax_history(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = make_runtime_config(Path(td))
@@ -414,6 +511,53 @@ class DataServiceTests(unittest.TestCase):
             rows = pq.read_table(uni_file).to_pylist()
             self.assertTrue(rows)
             self.assertTrue(all(row["source"] == "synthetic" for row in rows))
+
+    def test_build_combined_uses_binance_fallback_when_primary_kraken_is_partial(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cfg = make_runtime_config(root)
+            store = StateStore(cfg.state_db)
+            service = MarketDataService(
+                config=cfg,
+                ndax_client=_FakeNdaxClientWithEmptyUni(),
+                binance_client=_FakeBinanceClientWithUni(),
+                kraken_client=_FakeKrakenClient(),
+                state_store=store,
+            )
+
+            service.backfill(
+                from_date=date(2026, 1, 1),
+                to_date=date(2026, 1, 3),
+                timeframe="15m",
+                sources=["ndax", "binance"],
+            )
+            archive_rows: list[tuple[int, float, float]] = []
+            for idx, ts_ms in enumerate(_segment_timestamps(year=2026, month=1, day_count=2)):
+                archive_rows.append((ts_ms - 60_000, 25.0 + (idx * 0.03), 1.0))
+            _write_kraken_archive(root / "data" / "kraken" / "UNIUSD.csv", archive_rows)
+            service.backfill(
+                from_date=date(2026, 1, 1),
+                to_date=date(2026, 1, 2),
+                timeframe="15m",
+                sources=["kraken"],
+            )
+
+            combined = service.build_combined(
+                from_date=date(2026, 1, 1),
+                to_date=date(2026, 1, 3),
+                timeframe="15m",
+            )
+
+            uni = next(item for item in combined.symbols if item.symbol == "UNICAD")
+            self.assertEqual(uni.external_source, "kraken")
+            self.assertEqual(uni.external_rows, 96 * 3)
+            self.assertEqual(uni.combined_rows, 96 * 3)
+            self.assertEqual(uni.gap_count, 0)
+
+            selection = json.loads(
+                (root / "data" / "raw" / "external" / "15m" / "selection.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(selection["selections"]["UNICAD"]["source"], "kraken")
 
     def test_dual_source_backfill_and_combined_pipeline(self) -> None:
         with tempfile.TemporaryDirectory() as td:

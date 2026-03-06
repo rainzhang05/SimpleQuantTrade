@@ -52,6 +52,9 @@ class RuntimeConfig:
     dataset_mode: str
     binance_base_url: str
     binance_quote: str
+    kraken_base_url: str
+    kraken_archive_dir: Path
+    external_source_priority: tuple[str, ...]
     bridge_fx_symbol: str
     synth_weight_min: float
     synth_weight_max: float
@@ -157,16 +160,16 @@ def load_runtime_config() -> RuntimeConfig:
     if discord_max_retries < 0:
         raise ValueError("QTBOT_DISCORD_MAX_RETRIES must be >= 0.")
 
-    data_sources_raw = os.getenv("QTBOT_DATA_SOURCES", "ndax,binance")
+    data_sources_raw = os.getenv("QTBOT_DATA_SOURCES", "ndax,kraken,binance")
     data_sources = tuple(
         item.strip().lower() for item in data_sources_raw.split(",") if item.strip()
     )
-    valid_data_sources = {"ndax", "binance"}
+    valid_data_sources = {"ndax", "binance", "kraken"}
     if not data_sources:
         raise ValueError("QTBOT_DATA_SOURCES must include at least one source.")
     if any(item not in valid_data_sources for item in data_sources):
         raise ValueError(
-            "QTBOT_DATA_SOURCES supports only ndax and binance."
+            "QTBOT_DATA_SOURCES supports only ndax, kraken, and binance."
         )
 
     dataset_mode = os.getenv("QTBOT_DATASET_MODE", "combined").strip().lower()
@@ -180,6 +183,22 @@ def load_runtime_config() -> RuntimeConfig:
     binance_quote = os.getenv("QTBOT_BINANCE_QUOTE", "USDT").strip().upper()
     if not binance_quote:
         raise ValueError("QTBOT_BINANCE_QUOTE cannot be empty.")
+
+    kraken_base_url = os.getenv("QTBOT_KRAKEN_BASE_URL", "https://api.kraken.com").strip().rstrip("/")
+    if not kraken_base_url:
+        raise ValueError("QTBOT_KRAKEN_BASE_URL cannot be empty.")
+
+    kraken_archive_dir = _resolve_runtime_dir(os.getenv("QTBOT_KRAKEN_ARCHIVE_DIR", "data/kraken"))
+
+    external_source_priority_raw = os.getenv("QTBOT_EXTERNAL_SOURCE_PRIORITY", "kraken,binance")
+    external_source_priority = tuple(
+        item.strip().lower() for item in external_source_priority_raw.split(",") if item.strip()
+    )
+    valid_external_sources = {"kraken", "binance"}
+    if not external_source_priority:
+        raise ValueError("QTBOT_EXTERNAL_SOURCE_PRIORITY must include at least one source.")
+    if any(item not in valid_external_sources for item in external_source_priority):
+        raise ValueError("QTBOT_EXTERNAL_SOURCE_PRIORITY supports only kraken and binance.")
 
     bridge_fx_symbol = os.getenv("QTBOT_BRIDGE_FX_SYMBOL", "USDTCAD").strip().upper()
     if not bridge_fx_symbol:
@@ -269,6 +288,9 @@ def load_runtime_config() -> RuntimeConfig:
         dataset_mode=dataset_mode,
         binance_base_url=binance_base_url,
         binance_quote=binance_quote,
+        kraken_base_url=kraken_base_url,
+        kraken_archive_dir=kraken_archive_dir,
+        external_source_priority=external_source_priority,
         bridge_fx_symbol=bridge_fx_symbol,
         synth_weight_min=synth_weight_min,
         synth_weight_max=synth_weight_max,

@@ -111,6 +111,8 @@ Snapshot artifact rule:
 Data repair rule:
 - preserve deterministic market-data repair behavior; exchange outage gaps may be sealed only via the repository's explicit deterministic repair path, not ad hoc manual edits
 - preserve deterministic synthetic eligibility behavior; zero-overlap historical months may only be unlocked through the repository's anchored carry logic, not manual edits or ad hoc relabeling
+- preserve deterministic external-source selection behavior; Kraken is the preferred external historical source when available, with Binance retained as deterministic fallback until explicitly retired by evidence
+- preserve deterministic timestamp-level fallback behavior; combined data may use Binance only for timestamps the preferred external source does not cover, not as an undocumented manual override
 
 Repository distribution rule:
 - `data/` is a local-only working set and must remain ignored by git

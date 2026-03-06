@@ -43,10 +43,13 @@ class RuntimeConfigTests(unittest.TestCase):
                         "QTBOT_DISCORD_WEBHOOK_URL=https://discord.example/webhook",
                         "QTBOT_DISCORD_TIMEOUT_SECONDS=9",
                         "QTBOT_DISCORD_MAX_RETRIES=5",
-                        "QTBOT_DATA_SOURCES=ndax,binance",
+                        "QTBOT_DATA_SOURCES=ndax,kraken,binance",
                         "QTBOT_DATASET_MODE=combined",
                         "QTBOT_BINANCE_BASE_URL=https://api.binance.com",
                         "QTBOT_BINANCE_QUOTE=USDT",
+                        "QTBOT_KRAKEN_BASE_URL=https://api.kraken.com",
+                        "QTBOT_KRAKEN_ARCHIVE_DIR=data/kraken",
+                        "QTBOT_EXTERNAL_SOURCE_PRIORITY=kraken,binance",
                         "QTBOT_BRIDGE_FX_SYMBOL=USDTCAD",
                         "QTBOT_SYNTH_WEIGHT_MIN=0.25",
                         "QTBOT_SYNTH_WEIGHT_MAX=0.75",
@@ -77,10 +80,13 @@ class RuntimeConfigTests(unittest.TestCase):
             self.assertEqual(cfg.discord_webhook_url, "https://discord.example/webhook")
             self.assertEqual(cfg.discord_timeout_seconds, 9.0)
             self.assertEqual(cfg.discord_max_retries, 5)
-            self.assertEqual(cfg.data_sources, ("ndax", "binance"))
+            self.assertEqual(cfg.data_sources, ("ndax", "kraken", "binance"))
             self.assertEqual(cfg.dataset_mode, "combined")
             self.assertEqual(cfg.binance_base_url, "https://api.binance.com")
             self.assertEqual(cfg.binance_quote, "USDT")
+            self.assertEqual(cfg.kraken_base_url, "https://api.kraken.com")
+            self.assertEqual(cfg.kraken_archive_dir, (root / "data" / "kraken").resolve())
+            self.assertEqual(cfg.external_source_priority, ("kraken", "binance"))
             self.assertEqual(cfg.bridge_fx_symbol, "USDTCAD")
             self.assertEqual(cfg.synth_weight_min, 0.25)
             self.assertEqual(cfg.synth_weight_max, 0.75)

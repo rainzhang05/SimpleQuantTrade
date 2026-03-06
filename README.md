@@ -11,7 +11,7 @@ Authoritative docs:
 ## Current Active Direction
 
 - Execution venue: NDAX only (spot, CAD budget safety, reconciliation-first startup).
-- Data: dual-source 15m pipeline (`NDAX + Binance`) with deterministic combined CAD dataset.
+- Data: multi-source 15m pipeline (`NDAX + Kraken primary + Binance fallback`) with deterministic combined CAD dataset.
 - Active training/runtime universe: `27` symbols in `V1`; `BCH`, `RUNE`, and `TIA` are excluded from the active set.
 - Safety shell retained: control plane, preflight, risk halts, append-only logs, docker/staging/cutover.
 - Training/runtime ML path: phased per roadmap and plan.
@@ -32,8 +32,8 @@ Authoritative docs:
 - `qtbot cutover-checklist`
 
 ### Data pipeline
-- `qtbot data-backfill --from YYYY-MM-DD --to YYYY-MM-DD --timeframe 15m --sources ndax,binance`
-- `qtbot data-status --timeframe 15m --dataset ndax|binance|combined|all`
+- `qtbot data-backfill --from YYYY-MM-DD|earliest --to YYYY-MM-DD --timeframe 15m --sources ndax,kraken,binance`
+- `qtbot data-status --timeframe 15m --dataset ndax|kraken|binance|combined|all`
 - `qtbot data-build-combined --from YYYY-MM-DD --to YYYY-MM-DD --timeframe 15m`
 - `qtbot data-calibrate-weights --from YYYY-MM-DD --to YYYY-MM-DD --timeframe 15m --refresh monthly`
 - `qtbot data-weight-status --timeframe 15m`
@@ -42,7 +42,7 @@ Authoritative docs:
 - `qtbot eval --run <RUN_ID>`
 
 Defaults:
-- `data-backfill` defaults to `--sources ndax,binance`
+- `data-backfill` defaults to `--sources ndax,kraken,binance`
 - `data-status` defaults to `--dataset combined`
 
 ## Quickstart
@@ -75,16 +75,17 @@ PYTHONPATH=src python3 -m qtbot cutover-checklist --offline-only --budget 250 --
 
 ## End-to-End Data Workflow (Implemented Through Phase 6)
 
-### Step 1: Backfill raw NDAX + Binance 15m data
+### Step 1: Backfill raw NDAX + Kraken + Binance 15m data
 ```bash
-PYTHONPATH=src python3 -m qtbot data-backfill --from 2021-01-01 --to $(date -u +%F) --timeframe 15m --sources ndax,binance
+PYTHONPATH=src python3 -m qtbot data-backfill --from earliest --to $(date -u +%F) --timeframe 15m --sources ndax,kraken,binance
 ```
 
 Resume behavior:
 - Safe to stop anytime.
 - Rerun the same command to continue from missing windows.
 - No duplicate rows are written (idempotent merge).
-- Exchange-wide Binance outage windows are sealed deterministically with flat zero-volume carry rows.
+- Kraken archival history is imported from `data/kraken/*.csv`; post-archive history is topped up from the Kraken trades API.
+- Exchange/ingest outage windows for Kraken and Binance are sealed deterministically with flat zero-volume carry rows.
 
 Backfill progress log:
 - `runtime/logs/data_backfill.log`
@@ -96,6 +97,7 @@ PYTHONPATH=src python3 -m qtbot data-status --timeframe 15m --dataset all
 
 Coverage reports are written to:
 - `runtime/logs/data_coverage_ndax.json`
+- `runtime/logs/data_coverage_kraken.json`
 - `runtime/logs/data_coverage_binance.json`
 - `runtime/logs/data_coverage_combined.json`
 
@@ -106,8 +108,10 @@ PYTHONPATH=src python3 -m qtbot data-build-combined --from 2021-01-01 --to $(dat
 
 Combined build notes:
 - NDAX rows still take precedence over synthetic rows.
-- Symbols without enough symbol-local NDAX overlap fall back to shared universe-level CAD conversion ratios.
-- If NDAX omits a symbol entirely or has internal history gaps, the combined dataset fills those bars from normalized Binance and keeps source tags for audit.
+- Each symbol selects a deterministic preferred external source: Kraken first when available/stronger, Binance fallback otherwise.
+- If the preferred external source is missing a timestamp, Binance may still fill that timestamp so the combined dataset stays complete while Kraken top-up catches up.
+- Symbols without enough symbol-local NDAX overlap fall back to shared universe-level CAD conversion ratios within the same quote group.
+- If NDAX omits a symbol entirely or has internal history gaps, the combined dataset fills those bars from normalized external data and keeps source tags for audit.
 
 ### Step 4: Calibrate monthly synthetic weights
 ```bash
@@ -158,7 +162,7 @@ Scenario behavior:
 ## Next Steps to Final Production ML (Current -> Final)
 
 Current program status:
-- Implemented now: dual-source ingestion, combined CAD build, monthly calibration weighting, weighted training snapshot integration, and walk-forward training/evaluation.
+- Implemented now: multi-source ingestion, combined CAD build, monthly calibration weighting, weighted training snapshot integration, and walk-forward training/evaluation.
 - Next active build phase: promotion gates and model bundle publishing (see `docs/PLAN.md` phases 7-9).
 
 Execution sequence:
@@ -189,7 +193,10 @@ Do not enable ML live trading until all phase gates pass:
 
 All `data/` paths below are local-only and ignored by git:
 - `data/raw/ndax/15m/*.parquet`
+- `data/raw/kraken/15m/*.parquet`
 - `data/raw/binance/15m/*USDT.parquet`
+- `data/raw/external/15m/*.parquet`
+- `data/raw/external/15m/selection.json`
 - `data/combined/15m/*.parquet`
 - `data/snapshots/*`
 - `runtime/state.sqlite`
@@ -198,9 +205,12 @@ All `data/` paths below are local-only and ignored by git:
 
 ## Key Config (Dual-Source)
 
-- `QTBOT_DATA_SOURCES=ndax,binance`
+- `QTBOT_DATA_SOURCES=ndax,kraken,binance`
 - `QTBOT_DATASET_MODE=combined`
 - `QTBOT_BINANCE_BASE_URL=https://api.binance.com`
+- `QTBOT_KRAKEN_BASE_URL=https://api.kraken.com`
+- `QTBOT_KRAKEN_ARCHIVE_DIR=data/kraken`
+- `QTBOT_EXTERNAL_SOURCE_PRIORITY=kraken,binance`
 - `QTBOT_BINANCE_QUOTE=USDT`
 - `QTBOT_BRIDGE_FX_SYMBOL=USDTCAD`
 - `QTBOT_SYNTH_WEIGHT_MIN=0.20`
