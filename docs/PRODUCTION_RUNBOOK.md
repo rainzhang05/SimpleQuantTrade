@@ -80,6 +80,11 @@ Evidence required to move between steps:
 PYTHONPATH=src python3 -m qtbot data-backfill --from earliest --to $(date -u +%F) --timeframe 15m --sources ndax,kraken,binance
 ```
 
+Local wrapper:
+```bash
+./scripts/refresh_all_available_data.sh
+```
+
 Stop/resume behavior:
 - Safe to interrupt.
 - Rerun same command to continue missing windows.
@@ -126,6 +131,11 @@ Snapshot readiness checks:
 ```bash
 PYTHONPATH=src python3 -m qtbot train --snapshot <SNAPSHOT_ID> --folds 12 --universe V1
 PYTHONPATH=src python3 -m qtbot eval --run <RUN_ID>
+```
+
+Local wrapper:
+```bash
+./scripts/train_latest_snapshot.sh
 ```
 
 Universe note:

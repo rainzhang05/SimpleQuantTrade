@@ -145,6 +145,17 @@ PYTHONPATH=src python3 -m qtbot train --snapshot <SNAPSHOT_ID> --folds 12 --univ
 PYTHONPATH=src python3 -m qtbot eval --run <RUN_ID>
 ```
 
+Local helper scripts:
+```bash
+./scripts/refresh_all_available_data.sh
+./scripts/train_latest_snapshot.sh
+```
+
+Helper script notes:
+- `refresh_all_available_data.sh` backfills every source from its own earliest available date through today, rebuilds `combined`, recalibrates weights, and emits a fresh snapshot.
+- Kraken top-up after the archive end can take materially longer than archive import because it uses the paged trades API.
+- Safe to rerun after interruption; the underlying data pipeline is idempotent and resumes missing windows.
+
 Training artifacts:
 - `runtime/research/training/<RUN_ID>/manifest.json`
 - `runtime/research/training/<RUN_ID>/feature_spec.json`
