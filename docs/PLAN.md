@@ -13,7 +13,7 @@ Primary authority:
 - Phase 3 (combined builder): `implemented`
 - Phase 4 (calibration research + weights): `implemented`
 - Phase 5 (training integration): `implemented`
-- Phase 6 (walk-forward trainer/evaluator): `pending`
+- Phase 6 (walk-forward trainer/evaluator): `implemented`
 - Phase 7 (promotion + bundle publishing): `pending`
 - Phase 8 (live ML inference integration): `pending`
 - Phase 9 (staging/cutover ML finalization): `pending`
@@ -25,25 +25,25 @@ Notes:
 ## 0.1) Current Checkpoint and Immediate Next Phase
 
 Current official checkpoint:
-- Data stack phases 1-5 are complete and operational.
-- Next official implementation phase is **Phase 6 (Walk-Forward Training + Evaluation)**.
-- Model-training, promotion, and ML runtime cutover remain pending (phases 6-9).
+- Data stack phases 1-6 are complete and operational.
+- Next official implementation phase is **Phase 7 (Promotion + Bundle Publishing)**.
+- Promotion, active-bundle management, and ML runtime cutover remain pending (phases 7-9).
 
-Phase 6 entry gate (must be true before coding starts):
+Phase 7 entry gate:
 1. `data-status --dataset combined` shows coverage contract pass for the intended training window.
 2. `data-weight-status --timeframe 15m` shows recent monthly weights for train symbols.
 3. `build-snapshot --asof <ISO_TIME>` is reproducible over repeated runs with the same dataset hash.
+4. at least one `train` + `eval` run exists with persisted fold metrics under `runtime/research/training/<RUN_ID>/`.
 
-Phase 6 implementation objective:
-- Fit deterministic walk-forward training/evaluation runs from sealed weighted snapshots.
+Phase 7 implementation objective:
+- Gate trained runs deterministically and publish signed model bundles with atomic active-pointer updates.
 
 ## 0.2) Step-by-Step Runway: Now -> Final Production ML
 
-1. Complete Phase 6 (walk-forward trainer + evaluator + metrics persistence).
-2. Complete Phase 7 (promotion gates + bundle artifact writer + atomic active pointer).
-3. Complete Phase 8 (live runtime inference on bar close with deterministic blend + observe-only fallback).
-4. Complete Phase 9 (staging/cutover finalization, runbook evidence bundle, rollback drill).
-5. Enable ML live order path only after all phase gates pass and operator checklist evidence is archived.
+1. Complete Phase 7 (promotion gates + bundle artifact writer + atomic active pointer).
+2. Complete Phase 8 (live runtime inference on bar close with deterministic blend + observe-only fallback).
+3. Complete Phase 9 (staging/cutover finalization, runbook evidence bundle, rollback drill).
+4. Enable ML live order path only after all phase gates pass and operator checklist evidence is archived.
 
 Required evidence package for final production readiness:
 1. Snapshot reproducibility logs and dataset hashes.
@@ -173,19 +173,24 @@ This is the official phase where model-training input changes from NDAX-only to 
 - training input snapshot is reproducible and includes source-mix audit fields.
 - `build-snapshot` writes a manifest with deterministic hash and row-count parity checks.
 
-## 7) Phase 6: Walk-Forward Training + Evaluation (Official Model Training Phase)
+## 7) Phase 6: Walk-Forward Training + Evaluation (Official Model Training Phase, Implemented)
 
 This is the official phase where model fitting and evaluation become production-grade.
 
 ### Deliverables
 - walk-forward folds (default 12m train / 1m validate / 1m step)
 - LightGBM global + per-coin training
-- cost-aware evaluator with sensitivity runs:
-  - synthetic disabled baseline
-  - calibrated synthetic weights enabled
+- cost-aware evaluator with two persisted scenarios:
+  - `ndax_only`
+  - `weighted_combined`
 - CLI contract implemented for:
   - `qtbot train --snapshot <SNAPSHOT_ID> --folds <N> --universe V1`
   - `qtbot eval --run <RUN_ID>`
+- artifact layout under `runtime/research/training/<RUN_ID>/`
+- synthetic supervision repair:
+  - direct eligible months
+  - carry-forward eligibility from nearest prior qualifying same-symbol month
+  - blocked synthetic rows remain continuity-only
 
 ### Module boundaries
 - training/eval package (new)

@@ -54,6 +54,11 @@ def make_runtime_config(tmp_path: Path, **overrides) -> RuntimeConfig:
         conversion_max_median_ape=0.015,
         combined_max_gap_count=0,
         combined_min_coverage=0.999,
+        train_seed=42,
+        train_window_months=12,
+        valid_window_months=1,
+        train_step_months=1,
+        fee_pct_per_side=0.002,
     )
     if overrides:
         return replace(cfg, **overrides)

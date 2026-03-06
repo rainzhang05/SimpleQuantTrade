@@ -8,7 +8,8 @@ Canonical design source:
 Current rollout state:
 - Data foundation (dual-source + combined + calibration) is active.
 - Weighted training snapshot integration (Phase 5) is active.
-- Full ML bundle runtime path must follow `docs/PLAN.md` phases 6-9 in order.
+- Walk-forward training/evaluation (Phase 6) is active.
+- Bundle publishing and live ML runtime path must still follow `docs/PLAN.md` phases 7-9 in order.
 
 ## 1) Pre-Launch Readiness
 
@@ -27,6 +28,10 @@ Key artifacts:
 - `runtime/logs/trades.csv`
 - `runtime/logs/data_coverage_*.json`
 - `runtime/research/bridge_weighting/<RUN_ID>/metrics.json`
+- `runtime/research/training/<RUN_ID>/manifest.json`
+- `runtime/research/training/<RUN_ID>/feature_spec.json`
+- `runtime/research/training/<RUN_ID>/folds.json`
+- `runtime/research/training/<RUN_ID>/metrics.json`
 - `data/snapshots/<SNAPSHOT_ID>/manifest.json`
 - `data/snapshots/<SNAPSHOT_ID>/rows.parquet`
 
@@ -41,6 +46,8 @@ Run in order:
 PYTHONPATH=src python3 -m qtbot data-status --timeframe 15m --dataset all
 PYTHONPATH=src python3 -m qtbot data-weight-status --timeframe 15m
 PYTHONPATH=src python3 -m qtbot build-snapshot --asof <ISO_TIME> --timeframe 15m
+PYTHONPATH=src python3 -m qtbot train --snapshot <SNAPSHOT_ID> --folds 12 --universe V1
+PYTHONPATH=src python3 -m qtbot eval --run <RUN_ID>
 PYTHONPATH=src python3 -m qtbot staging-validate --offline-only --budget 1000 --cadence-seconds 1 --min-loops 1 --timeout-seconds 30
 PYTHONPATH=src python3 -m qtbot cutover-checklist --offline-only --budget 250 --staging-max-age-hours 168
 ```
@@ -55,10 +62,9 @@ Expected outcomes:
 ## 2.1) Required Runway Before ML Live Activation
 
 This sequence is mandatory before enabling ML live order path:
-1. Complete Phase 6: walk-forward training and evaluator with deterministic metrics.
-2. Complete Phase 7: promotion gates and signed bundle publication.
-3. Complete Phase 8: runtime inference in observe-only mode with deterministic outputs.
-4. Complete Phase 9: staging/cutover reports and rollback drill evidence.
+1. Complete Phase 7: promotion gates and signed bundle publication.
+2. Complete Phase 8: runtime inference in observe-only mode with deterministic outputs.
+3. Complete Phase 9: staging/cutover reports and rollback drill evidence.
 
 Evidence required to move between steps:
 1. reproducible snapshot hash for fixed as-of time.
@@ -108,6 +114,18 @@ Snapshot readiness checks:
 - source mix present in manifest
 - synthetic rows include monthly effective weights
 - `dataset_hash` is stable for repeated runs at the same cutoff
+
+### 3.5 Walk-forward training + evaluation
+```bash
+PYTHONPATH=src python3 -m qtbot train --snapshot <SNAPSHOT_ID> --folds 12 --universe V1
+PYTHONPATH=src python3 -m qtbot eval --run <RUN_ID>
+```
+
+Training readiness checks:
+- `runtime/research/training/<RUN_ID>/manifest.json` exists
+- `training_runs`, `training_folds`, and `fold_metrics` contain the run
+- `metrics.json` reports both `ndax_only` and `weighted_combined`
+- repeated `eval --run <RUN_ID>` rewrites identical metrics without duplicate DB rows
 
 ## 4) Launch Procedure
 

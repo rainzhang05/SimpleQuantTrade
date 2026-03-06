@@ -30,6 +30,7 @@ _BINANCE_PAGE_LIMIT = 1000
 _WEIGHT_METHOD_VERSION = "bridge_weight_v1"
 _BINANCE_GAP_FILL_SOURCE = "binance_gap_fill"
 _SYNTHETIC_GAP_FILL_SOURCE = "synthetic_gap_fill"
+_SUPERVISED_ELIGIBILITY_MIN_OVERLAP_ROWS = 250
 
 
 def parse_timeframe_seconds(raw_value: str) -> int:
@@ -227,6 +228,9 @@ class CalibrationWeightRow:
     weight_quality: float
     weight_backtest: float
     weight_final: float
+    supervised_eligible: bool
+    eligibility_mode: str
+    anchor_month: str | None
     report_note: str
 
 
@@ -705,6 +709,9 @@ class MarketDataService:
                             weight_quality=weight_quality,
                             weight_backtest=weight_backtest,
                             weight_final=0.0,
+                            supervised_eligible=False,
+                            eligibility_mode="blocked",
+                            anchor_month=None,
                             report_note="pending_global_shrinkage",
                         ),
                         weight_raw,
@@ -746,20 +753,91 @@ class MarketDataService:
                 weight_quality=row.weight_quality,
                 weight_backtest=row.weight_backtest,
                 weight_final=weight_final,
+                supervised_eligible=False,
+                eligibility_mode="blocked",
+                anchor_month=None,
                 report_note=note,
             )
             finalized.append(finalized_row)
-            self._state_store.upsert_synthetic_weight(
-                symbol=finalized_row.symbol,
-                timeframe=timeframe,
-                effective_month=finalized_row.effective_month,
-                weight_quality=finalized_row.weight_quality,
-                weight_backtest=finalized_row.weight_backtest,
-                weight_final=finalized_row.weight_final,
-                overlap_rows=finalized_row.overlap_rows,
-                quality_pass=finalized_row.quality_pass,
-                method_version=_WEIGHT_METHOD_VERSION,
-            )
+
+        eligibility_overlap_min = _supervised_eligibility_min_overlap(
+            min_overlap_rows=self._config.min_overlap_rows_for_weight
+        )
+        finalized_by_symbol: dict[str, list[CalibrationWeightRow]] = {}
+        for row in finalized:
+            finalized_by_symbol.setdefault(row.symbol, []).append(row)
+
+        eligible_rows: list[CalibrationWeightRow] = []
+        for symbol in sorted(finalized_by_symbol):
+            anchor_month: str | None = None
+            for row in sorted(finalized_by_symbol[symbol], key=lambda item: item.effective_month):
+                if _direct_supervised_eligible(
+                    overlap_rows=row.overlap_rows,
+                    median_ape_close=row.median_ape_close,
+                    ret_corr=row.ret_corr,
+                    max_median_ape=self._config.conversion_max_median_ape,
+                    min_overlap_rows=eligibility_overlap_min,
+                ):
+                    eligible_row = CalibrationWeightRow(
+                        symbol=row.symbol,
+                        effective_month=row.effective_month,
+                        overlap_rows=row.overlap_rows,
+                        median_ape_close=row.median_ape_close,
+                        median_abs_ret_err=row.median_abs_ret_err,
+                        ret_corr=row.ret_corr,
+                        direction_match=row.direction_match,
+                        basis_median=row.basis_median,
+                        basis_mad=row.basis_mad,
+                        quality_score=row.quality_score,
+                        quality_pass=row.quality_pass,
+                        weight_quality=row.weight_quality,
+                        weight_backtest=row.weight_backtest,
+                        weight_final=row.weight_final,
+                        supervised_eligible=True,
+                        eligibility_mode="direct",
+                        anchor_month=row.effective_month,
+                        report_note=row.report_note,
+                    )
+                    anchor_month = row.effective_month
+                elif row.overlap_rows == 0 and anchor_month is not None:
+                    eligible_row = CalibrationWeightRow(
+                        symbol=row.symbol,
+                        effective_month=row.effective_month,
+                        overlap_rows=row.overlap_rows,
+                        median_ape_close=row.median_ape_close,
+                        median_abs_ret_err=row.median_abs_ret_err,
+                        ret_corr=row.ret_corr,
+                        direction_match=row.direction_match,
+                        basis_median=row.basis_median,
+                        basis_mad=row.basis_mad,
+                        quality_score=row.quality_score,
+                        quality_pass=row.quality_pass,
+                        weight_quality=row.weight_quality,
+                        weight_backtest=row.weight_backtest,
+                        weight_final=row.weight_final,
+                        supervised_eligible=True,
+                        eligibility_mode="carry_forward",
+                        anchor_month=anchor_month,
+                        report_note=row.report_note,
+                    )
+                else:
+                    eligible_row = row
+
+                eligible_rows.append(eligible_row)
+                self._state_store.upsert_synthetic_weight(
+                    symbol=eligible_row.symbol,
+                    timeframe=timeframe,
+                    effective_month=eligible_row.effective_month,
+                    weight_quality=eligible_row.weight_quality,
+                    weight_backtest=eligible_row.weight_backtest,
+                    weight_final=eligible_row.weight_final,
+                    overlap_rows=eligible_row.overlap_rows,
+                    quality_pass=eligible_row.quality_pass,
+                    method_version=_WEIGHT_METHOD_VERSION,
+                    supervised_eligible=eligible_row.supervised_eligible,
+                    eligibility_mode=eligible_row.eligibility_mode,
+                    anchor_month=eligible_row.anchor_month,
+                )
 
         completed_at = _utc_now_iso()
         output_path = self._write_weight_report(
@@ -773,13 +851,13 @@ class MarketDataService:
                 "refresh": refresh_key,
                 "weight_global": weight_global,
                 "method_version": _WEIGHT_METHOD_VERSION,
-                "rows": [asdict(row) for row in finalized],
+                "rows": [asdict(row) for row in eligible_rows],
             },
         )
 
         self._emit_progress(
             "data_calibrate_weights_completed "
-            f"run_id={run_id} rows={len(finalized)} symbols={len({row.symbol for row in finalized})}"
+            f"run_id={run_id} rows={len(eligible_rows)} symbols={len({row.symbol for row in eligible_rows})}"
         )
         return WeightCalibrationSummary(
             started_at_utc=started_at,
@@ -789,10 +867,10 @@ class MarketDataService:
             requested_from=from_date.isoformat(),
             requested_to=to_date.isoformat(),
             refresh=refresh_key,
-            symbols_total=len({row.symbol for row in finalized}),
-            rows_total=len(finalized),
+            symbols_total=len({row.symbol for row in eligible_rows}),
+            rows_total=len(eligible_rows),
             output_file=str(output_path),
-            rows=finalized,
+            rows=eligible_rows,
         )
 
     def weight_status(self, *, timeframe: str) -> WeightStatusSummary:
@@ -819,6 +897,9 @@ class MarketDataService:
                     "weight_backtest": row["weight_backtest"],
                     "overlap_rows": row["overlap_rows"],
                     "quality_pass": bool(row["quality_pass"]),
+                    "supervised_eligible": bool(row.get("supervised_eligible")),
+                    "eligibility_mode": row.get("eligibility_mode"),
+                    "anchor_month": row.get("anchor_month"),
                     "method_version": row["method_version"],
                     "updated_at_utc": row["updated_at_utc"],
                 }
@@ -2422,6 +2503,25 @@ def _grid_search_weight(
             best_weight = weight
 
     return _clamp(best_weight, weight_min, weight_max)
+
+
+def _supervised_eligibility_min_overlap(*, min_overlap_rows: int) -> int:
+    return max(_SUPERVISED_ELIGIBILITY_MIN_OVERLAP_ROWS, max(1, min_overlap_rows // 4))
+
+
+def _direct_supervised_eligible(
+    *,
+    overlap_rows: int,
+    median_ape_close: float,
+    ret_corr: float,
+    max_median_ape: float,
+    min_overlap_rows: int,
+) -> bool:
+    return (
+        overlap_rows >= min_overlap_rows
+        and median_ape_close <= max_median_ape
+        and ret_corr >= 0.30
+    )
 
 
 def _nearest_series_value(*, series: list[tuple[int, float]], timestamps: list[int], ts: int) -> float | None:

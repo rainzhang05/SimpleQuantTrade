@@ -142,6 +142,104 @@ class _FakeBinanceClientWithBch(_FakeBinanceClient):
         )
 
 
+def _generate_ndax_from_close_map(
+    *,
+    timestamps: list[int],
+    close_fn,
+    instrument_id: int,
+) -> list[list[float]]:
+    rows: list[list[float]] = []
+    for idx, ts in enumerate(timestamps):
+        close = float(close_fn(idx))
+        rows.append([ts, close, close, close, close, 10.0 + idx, close, close, instrument_id])
+    return rows
+
+
+def _generate_binance_from_close_map(
+    *,
+    timestamps: list[int],
+    close_fn,
+) -> list[list[float]]:
+    rows: list[list[float]] = []
+    for idx, ts in enumerate(timestamps):
+        close = float(close_fn(idx))
+        rows.append([ts, close, close, close, close, 20.0 + idx, ts + 899_999, 0.0, 0, 0.0, 0.0, 0.0])
+    return rows
+
+
+def _segment_timestamps(*, year: int, month: int, day_count: int) -> list[int]:
+    timestamps: list[int] = []
+    for day in range(1, day_count + 1):
+        start = _ts_ms(year, month, day, 0, 0)
+        for idx in range(96):
+            timestamps.append(start + (idx * 900_000))
+    return timestamps
+
+
+class _FakeNdaxClientCarryForward:
+    def __init__(self) -> None:
+        self._instruments = [
+            {"Product1Symbol": "BTC", "Product2Symbol": "CAD", "Symbol": "BTCCAD", "InstrumentId": 1},
+            {"Product1Symbol": "BCH", "Product2Symbol": "CAD", "Symbol": "BCHCAD", "InstrumentId": 2},
+            {"Product1Symbol": "USDT", "Product2Symbol": "CAD", "Symbol": "USDTCAD", "InstrumentId": 3},
+        ]
+        january = _segment_timestamps(year=2026, month=1, day_count=3)
+        february = _segment_timestamps(year=2026, month=2, day_count=3)
+        self._rows_by_instrument = {
+            1: _generate_ndax_from_close_map(
+                timestamps=january,
+                close_fn=lambda idx: (50.0 + (idx * 0.05)) * 2.0,
+                instrument_id=1,
+            ),
+            2: [],
+            3: _generate_ndax_from_close_map(
+                timestamps=january + february,
+                close_fn=lambda idx: 2.0,
+                instrument_id=3,
+            ),
+        }
+
+    def get_instruments(self):
+        return list(self._instruments)
+
+    def get_ticker_history(self, *, instrument_id: int, interval_seconds: int, from_date: date, to_date: date):
+        if interval_seconds != 900:
+            return []
+        start = datetime(from_date.year, from_date.month, from_date.day, tzinfo=timezone.utc)
+        end_exclusive = datetime(to_date.year, to_date.month, to_date.day, tzinfo=timezone.utc) + timedelta(days=1)
+        start_ms = int(start.timestamp() * 1000)
+        end_ms = int(end_exclusive.timestamp() * 1000)
+        rows = self._rows_by_instrument.get(instrument_id, [])
+        return [row for row in rows if start_ms <= int(row[0]) < end_ms]
+
+
+class _FakeBinanceClientCarryForward:
+    def __init__(self) -> None:
+        january = _segment_timestamps(year=2026, month=1, day_count=3)
+        february = _segment_timestamps(year=2026, month=2, day_count=3)
+        self._symbols = {"BTCUSDT", "BCHUSDT"}
+        self._rows_by_symbol = {
+            "BTCUSDT": _generate_binance_from_close_map(
+                timestamps=january + february,
+                close_fn=lambda idx: 50.0 + (idx * 0.05),
+            ),
+            "BCHUSDT": _generate_binance_from_close_map(
+                timestamps=january + february,
+                close_fn=lambda idx: 25.0 + (idx * 0.03),
+            ),
+        }
+
+    def list_spot_symbols(self):
+        return set(self._symbols)
+
+    def get_klines(self, *, symbol: str, interval: str, start_time_ms: int, end_time_ms: int, limit: int = 1000):
+        if interval != "15m":
+            return []
+        rows = self._rows_by_symbol.get(symbol.upper(), [])
+        filtered = [row for row in rows if start_time_ms <= int(row[0]) <= end_time_ms]
+        return filtered[:limit]
+
+
 class DataServiceTests(unittest.TestCase):
     def test_parse_timeframe_seconds(self) -> None:
         self.assertEqual(parse_timeframe_seconds("15m"), 900)
@@ -359,6 +457,55 @@ class DataServiceTests(unittest.TestCase):
 
             weights = service.weight_status(timeframe="15m")
             self.assertGreaterEqual(weights.row_count, 1)
+
+    def test_calibrate_weights_marks_direct_carry_forward_and_blocked_months(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = make_runtime_config(Path(td))
+            store = StateStore(cfg.state_db)
+            service = MarketDataService(
+                config=cfg,
+                ndax_client=_FakeNdaxClientCarryForward(),
+                binance_client=_FakeBinanceClientCarryForward(),
+                state_store=store,
+            )
+
+            service.backfill(
+                from_date=date(2026, 1, 1),
+                to_date=date(2026, 2, 3),
+                timeframe="15m",
+                sources=["ndax", "binance"],
+            )
+            service.build_combined(
+                from_date=date(2026, 1, 1),
+                to_date=date(2026, 2, 3),
+                timeframe="15m",
+            )
+            service.calibrate_weights(
+                from_date=date(2026, 1, 1),
+                to_date=date(2026, 2, 3),
+                timeframe="15m",
+                refresh="monthly",
+            )
+
+            weights = {
+                (row["symbol"], row["effective_month"]): row
+                for row in store.get_synthetic_weights(timeframe="15m")
+            }
+            btc_jan = weights[("BTCCAD", "2026-01")]
+            btc_feb = weights[("BTCCAD", "2026-02")]
+            bch_jan = weights[("BCHCAD", "2026-01")]
+
+            self.assertEqual(int(btc_jan["supervised_eligible"]), 1)
+            self.assertEqual(btc_jan["eligibility_mode"], "direct")
+            self.assertEqual(btc_jan["anchor_month"], "2026-01")
+
+            self.assertEqual(int(btc_feb["supervised_eligible"]), 1)
+            self.assertEqual(btc_feb["eligibility_mode"], "carry_forward")
+            self.assertEqual(btc_feb["anchor_month"], "2026-01")
+
+            self.assertEqual(int(bch_jan["supervised_eligible"]), 0)
+            self.assertEqual(bch_jan["eligibility_mode"], "blocked")
+            self.assertIsNone(bch_jan["anchor_month"])
 
 
 if __name__ == "__main__":

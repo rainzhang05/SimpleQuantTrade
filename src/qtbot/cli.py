@@ -213,6 +213,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="Timeframe alias (currently supports 15m).",
     )
 
+    train_parser = subparsers.add_parser(
+        "train",
+        help="Train deterministic walk-forward LightGBM models from a sealed snapshot.",
+    )
+    train_parser.add_argument(
+        "--snapshot",
+        required=True,
+        help="Snapshot ID under data/snapshots/.",
+    )
+    train_parser.add_argument(
+        "--folds",
+        type=int,
+        default=12,
+        help="Number of latest eligible walk-forward folds to train.",
+    )
+    train_parser.add_argument(
+        "--universe",
+        default="V1",
+        help="Universe name (currently supports V1 only).",
+    )
+
+    eval_parser = subparsers.add_parser(
+        "eval",
+        help="Evaluate persisted validation predictions for a training run.",
+    )
+    eval_parser.add_argument(
+        "--run",
+        required=True,
+        help="Training run ID under runtime/research/training/.",
+    )
+
     staging_parser = subparsers.add_parser(
         "staging-validate",
         help="Run M10 staging validation workflow and emit JSON report.",
@@ -360,6 +391,18 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
             asof=args.asof,
             timeframe=args.timeframe,
+        )
+    if command == "train":
+        return _handle_train(
+            config=config,
+            snapshot_id=args.snapshot,
+            folds=args.folds,
+            universe=args.universe,
+        )
+    if command == "eval":
+        return _handle_eval(
+            config=config,
+            run_id=args.run,
         )
     if command == "staging-validate":
         return _handle_staging_validate(
@@ -767,6 +810,44 @@ def _handle_build_snapshot(
     return 0
 
 
+def _handle_train(
+    *,
+    config: RuntimeConfig,
+    snapshot_id: str,
+    folds: int,
+    universe: str,
+) -> int:
+    try:
+        service = _make_training_service(config)
+        summary = service.train(
+            snapshot_id=snapshot_id,
+            folds=folds,
+            universe=universe,
+        )
+    except ValueError as exc:
+        print(f"Training failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(json.dumps(summary.to_payload(), indent=2, sort_keys=True))
+    return 0
+
+
+def _handle_eval(
+    *,
+    config: RuntimeConfig,
+    run_id: str,
+) -> int:
+    try:
+        service = _make_evaluation_service(config)
+        summary = service.evaluate(run_id=run_id)
+    except ValueError as exc:
+        print(f"Evaluation failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(json.dumps(summary.to_payload(), indent=2, sort_keys=True))
+    return 0
+
+
 def _handle_staging_validate(
     *,
     config: RuntimeConfig,
@@ -870,6 +951,24 @@ def _make_snapshot_service(config: RuntimeConfig):
     from qtbot.snapshot import TrainingSnapshotService
 
     return TrainingSnapshotService(
+        config=config,
+        state_store=StateStore(config.state_db),
+    )
+
+
+def _make_training_service(config: RuntimeConfig):
+    from qtbot.training import TrainingService
+
+    return TrainingService(
+        config=config,
+        state_store=StateStore(config.state_db),
+    )
+
+
+def _make_evaluation_service(config: RuntimeConfig):
+    from qtbot.training import EvaluationService
+
+    return EvaluationService(
         config=config,
         state_store=StateStore(config.state_db),
     )

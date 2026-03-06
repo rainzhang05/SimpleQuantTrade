@@ -168,6 +168,36 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.asof, "2026-03-05T12:00:00Z")
         self.assertEqual(args.timeframe, "15m")
 
+    def test_parser_accepts_train_flags(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "train",
+                "--snapshot",
+                "20260305T120000Z_combined_15m_hash",
+                "--folds",
+                "6",
+                "--universe",
+                "V1",
+            ]
+        )
+        self.assertEqual(args.command, "train")
+        self.assertEqual(args.snapshot, "20260305T120000Z_combined_15m_hash")
+        self.assertEqual(args.folds, 6)
+        self.assertEqual(args.universe, "V1")
+
+    def test_parser_accepts_eval_flags(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "eval",
+                "--run",
+                "20260305T120000Z_run",
+            ]
+        )
+        self.assertEqual(args.command, "eval")
+        self.assertEqual(args.run, "20260305T120000Z_run")
+
 
 if __name__ == "__main__":
     unittest.main()

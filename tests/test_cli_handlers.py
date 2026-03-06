@@ -62,6 +62,8 @@ class CliHandlerTests(unittest.TestCase):
                 mock.patch("qtbot.cli._handle_data_calibrate_weights", return_value=0) as h_calibrate,
                 mock.patch("qtbot.cli._handle_data_weight_status", return_value=0) as h_weight_status,
                 mock.patch("qtbot.cli._handle_build_snapshot", return_value=0) as h_build_snapshot,
+                mock.patch("qtbot.cli._handle_train", return_value=0) as h_train,
+                mock.patch("qtbot.cli._handle_eval", return_value=0) as h_eval,
                 mock.patch("qtbot.cli._handle_staging_validate", return_value=0) as h_staging,
                 mock.patch("qtbot.cli._handle_cutover_checklist", return_value=0) as h_cutover,
             ):
@@ -177,6 +179,25 @@ class CliHandlerTests(unittest.TestCase):
                     0,
                 )
                 h_build_snapshot.assert_called_once()
+
+                self.assertEqual(
+                    cli.main(
+                        [
+                            "train",
+                            "--snapshot",
+                            "snap123",
+                            "--folds",
+                            "4",
+                            "--universe",
+                            "V1",
+                        ]
+                    ),
+                    0,
+                )
+                h_train.assert_called_once()
+
+                self.assertEqual(cli.main(["eval", "--run", "run123"]), 0)
+                h_eval.assert_called_once()
 
                 self.assertEqual(cli.main(["staging-validate", "--offline-only"]), 0)
                 h_staging.assert_called_once()
@@ -557,6 +578,76 @@ class CliHandlerTests(unittest.TestCase):
                 )
             self.assertEqual(code, 1)
             self.assertIn("Snapshot build failed", err)
+
+    def test_handle_train(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = make_runtime_config(Path(td))
+            summary = mock.Mock()
+            summary.to_payload.return_value = {
+                "run_id": "run123",
+                "snapshot_id": "snap123",
+                "status": "trained",
+            }
+            service = mock.Mock()
+            service.train.return_value = summary
+            with mock.patch("qtbot.cli._make_training_service", return_value=service):
+                code, out, err = _capture_output(
+                    cli._handle_train,
+                    config=cfg,
+                    snapshot_id="snap123",
+                    folds=4,
+                    universe="V1",
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(err, "")
+            payload = json.loads(out)
+            self.assertEqual(payload["run_id"], "run123")
+            service.train.assert_called_once_with(snapshot_id="snap123", folds=4, universe="V1")
+
+            service.train.side_effect = ValueError("bad snapshot")
+            with mock.patch("qtbot.cli._make_training_service", return_value=service):
+                code, _, err = _capture_output(
+                    cli._handle_train,
+                    config=cfg,
+                    snapshot_id="snap123",
+                    folds=4,
+                    universe="V1",
+                )
+            self.assertEqual(code, 1)
+            self.assertIn("Training failed", err)
+
+    def test_handle_eval(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = make_runtime_config(Path(td))
+            summary = mock.Mock()
+            summary.to_payload.return_value = {
+                "run_id": "run123",
+                "primary_scenario": "weighted_combined",
+                "status": "evaluated",
+            }
+            service = mock.Mock()
+            service.evaluate.return_value = summary
+            with mock.patch("qtbot.cli._make_evaluation_service", return_value=service):
+                code, out, err = _capture_output(
+                    cli._handle_eval,
+                    config=cfg,
+                    run_id="run123",
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(err, "")
+            payload = json.loads(out)
+            self.assertEqual(payload["primary_scenario"], "weighted_combined")
+            service.evaluate.assert_called_once_with(run_id="run123")
+
+            service.evaluate.side_effect = ValueError("bad run")
+            with mock.patch("qtbot.cli._make_evaluation_service", return_value=service):
+                code, _, err = _capture_output(
+                    cli._handle_eval,
+                    config=cfg,
+                    run_id="run123",
+                )
+            self.assertEqual(code, 1)
+            self.assertIn("Evaluation failed", err)
 
     def test_handle_start_and_main_dispatch(self) -> None:
         with tempfile.TemporaryDirectory() as td:

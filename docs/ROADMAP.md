@@ -45,7 +45,7 @@ Legacy fixed-rule 1m EMA/ATR behavior is archived at:
 - Runtime controls/logs: `runtime/control.json`, `runtime/logs/`
 - `data/` is a local-only artifact tree and is not version-controlled; each machine must build or refresh it locally through the CLI pipeline.
 
-### 1.2 Training layer (Phase 5 snapshot implemented; later phases remain)
+### 1.2 Training layer (Phase 6 training/evaluation implemented; later phases remain)
 - Sealed snapshot builder with deterministic dataset hash.
 - Deterministic feature pipeline (50-80 features).
 - Walk-forward orchestrator.
@@ -189,6 +189,11 @@ Normalized quality score `Q in [0,1]`:
 Refresh cadence:
 - default monthly (`QTBOT_SYNTH_WEIGHT_REFRESH=monthly`).
 
+Eligibility metadata persisted per symbol-month:
+- `supervised_eligible`
+- `eligibility_mode` in `{direct, carry_forward, blocked}`
+- `anchor_month`
+
 ## 7) Training Label and Feature Contracts (Phased)
 
 ### 7.1 Features (target)
@@ -223,7 +228,10 @@ Phase 5 weighting rules:
 - default training dataset source is `combined` via `QTBOT_DATASET_MODE=combined`
 - NDAX rows use `effective_monthly_weight=1.0`
 - synthetic rows use monthly `w_final`
-- synthetic rows with `quality_pass=false` remain in the snapshot as `row_status=continuity_only`
+- synthetic supervision is gated by `synthetic_weights.supervised_eligible`, not raw `quality_pass`
+- direct qualifying months use `eligibility_mode=direct`
+- zero-overlap months may reuse the nearest prior qualifying same-symbol month as `eligibility_mode=carry_forward`
+- synthetic rows with no qualifying anchor remain `row_status=continuity_only`
 - `synthetic_gap_fill` rows, and rows whose next bar is `synthetic_gap_fill`, remain continuity-only
 - `supervised_row_weight=0.0` when `label_available=false`
 
@@ -232,7 +240,7 @@ Snapshot hash contract:
 - row order is deterministic: Universe V1 symbol order, then ascending `timestamp_ms`
 - manifest includes per-symbol parity checks and source-mix audits
 
-## 8) Training, Evaluation, Promotion (Phased)
+## 8) Training, Evaluation, Promotion
 
 ### 8.1 Models
 - LightGBM global + per-coin.
@@ -246,6 +254,23 @@ Snapshot hash contract:
 - Train: 12 months
 - Validate: 1 month
 - Step: 1 month
+- CLI:
+  - `qtbot train --snapshot <SNAPSHOT_ID> --folds <N> --universe V1`
+  - `qtbot eval --run <RUN_ID>`
+
+Training artifact layout:
+- `runtime/research/training/<RUN_ID>/manifest.json`
+- `runtime/research/training/<RUN_ID>/feature_spec.json`
+- `runtime/research/training/<RUN_ID>/folds.json`
+- `runtime/research/training/<RUN_ID>/metrics.json`
+- `runtime/research/training/<RUN_ID>/predictions/fold_<NN>/<scenario>.parquet`
+- `runtime/research/training/<RUN_ID>/models/global/<scenario>/fold_<NN>.txt`
+- `runtime/research/training/<RUN_ID>/models/per_coin/<SYMBOL>/<scenario>/fold_<NN>.txt`
+
+Feature contract (implemented v1):
+- fixed 56-feature historical-only spec from combined rows plus raw NDAX/Binance context
+- missing raw-source context is imputed to `0.0` and paired with availability flags
+- exact feature schema is versioned in `feature_spec.json`
 
 ### 8.3 Cost model defaults
 - Fee baseline: `QTBOT_FEE_PCT_PER_SIDE=0.002` (0.2% per side)
@@ -324,8 +349,10 @@ Defaults:
 - dataset source comes from `QTBOT_DATASET_MODE` (default `combined`)
 - if `<ISO_TIME>` omits an offset, UTC is assumed
 
-### 11.4 Training/model commands (phased)
-- `train`, `eval`, `promote`
+### 11.4 Training/model commands
+- `qtbot train --snapshot <SNAPSHOT_ID> --folds <N> --universe V1`
+- `qtbot eval --run <RUN_ID>`
+- `promote`
 - `model-status`, `predict`, `set-active-bundle`
 
 ## 12) SQLite Schema Contract
@@ -340,8 +367,11 @@ Active dual-source tables:
 Retained runtime tables:
 - `bot_state`, `risk_state`, `positions`, `state_events`, `data_coverage`
 
-Planned ML training tables:
-- `training_runs`, `training_folds`, `fold_metrics`, `promotions`
+Active ML training tables:
+- `training_runs`, `training_folds`, `fold_metrics`
+
+Planned promotion/runtime tables:
+- `promotions`
 
 Schema rules:
 - append-only or explicit upsert semantics
@@ -364,6 +394,11 @@ Required dual-source variables:
 - `QTBOT_CONVERSION_MAX_MEDIAN_APE=0.015`
 - `QTBOT_COMBINED_MAX_GAP_COUNT=0`
 - `QTBOT_COMBINED_MIN_COVERAGE=0.999`
+- `QTBOT_TRAIN_SEED=42`
+- `QTBOT_TRAIN_WINDOW_MONTHS=12`
+- `QTBOT_VALID_WINDOW_MONTHS=1`
+- `QTBOT_TRAIN_STEP_MONTHS=1`
+- `QTBOT_FEE_PCT_PER_SIDE` defaults to `QTBOT_TAKER_FEE_RATE` when unset
 
 Core trading/risk defaults remain in `src/qtbot/config.py`.
 
@@ -399,21 +434,18 @@ I. Staging/cutover ML readiness
 ## 15) Current Program Status and Next-Step Gates
 
 Current status:
-- Milestones A-E are implemented (data ingestion, combined build, calibration weighting, weighted snapshot integration).
-- Milestones F-I remain the official implementation runway to production ML.
-- The immediate next milestone is **F (Cost-aware evaluator / walk-forward training)**.
+- Milestones A-F are implemented (data ingestion, combined build, calibration weighting, weighted snapshot integration, walk-forward training/evaluation).
+- Milestones G-I remain the official implementation runway to production ML.
+- The immediate next milestone is **G (Promotion + bundle publisher)**.
 
 Mandatory gate sequence from current state to production:
-1. **F: Cost-aware evaluator**
-   - Entry: snapshot builder and weighted dataset path complete.
-   - Exit: deterministic walk-forward metrics with sensitivity runs.
-2. **G: Promotion + bundle publisher**
+1. **G: Promotion + bundle publisher**
    - Entry: evaluator outputs complete and gate inputs persisted.
    - Exit: deterministic promote accept/reject + atomic `LATEST` update + signature verification.
-3. **H: Live inference integration**
+2. **H: Live inference integration**
    - Entry: at least one promoted bundle and passing model integrity checks.
    - Exit: bar-close deterministic predictions with observe-only safety fallback.
-4. **I: Staging/cutover readiness**
+3. **I: Staging/cutover readiness**
    - Entry: live inference path stable in observe-only.
    - Exit: staging + cutover reports pass with rollback drill evidence.
 

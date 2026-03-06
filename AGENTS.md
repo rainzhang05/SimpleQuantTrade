@@ -98,6 +98,7 @@ Protect these assets:
 - runtime DB: `runtime/state.sqlite`
 - control file: `runtime/control.json`
 - runtime logs: `runtime/logs/*`
+- training artifacts: `runtime/research/training/*`
 - snapshots: `data/snapshots/*`
 - raw/combined data: `data/raw/*`, `data/combined/*`
 - model bundles: `models/bundles/*`

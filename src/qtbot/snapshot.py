@@ -77,6 +77,9 @@ class SnapshotWeightUsage:
     symbol: str
     effective_month: str
     quality_pass: bool
+    supervised_eligible: bool
+    eligibility_mode: str
+    anchor_month: str | None
     weight_final: float
     method_version: str
     rows_total: int
@@ -311,6 +314,9 @@ class TrainingSnapshotService:
 
                     effective_month = _month_key(current_ts)
                     quality_pass = True
+                    supervised_eligible = True
+                    eligibility_mode = "direct"
+                    anchor_month: str | None = effective_month
                     effective_monthly_weight = 1.0
                     weight_method_version = _NATIVE_WEIGHT_METHOD_VERSION
                     if dataset == "combined" and synthetic_source:
@@ -320,6 +326,13 @@ class TrainingSnapshotService:
                                 f"Missing synthetic weight for symbol={symbol} effective_month={effective_month}"
                             )
                         quality_pass = bool(weight_row["quality_pass"])
+                        supervised_eligible = bool(weight_row.get("supervised_eligible"))
+                        eligibility_mode = str(weight_row.get("eligibility_mode") or "blocked")
+                        anchor_month = (
+                            str(weight_row.get("anchor_month"))
+                            if weight_row.get("anchor_month") is not None
+                            else None
+                        )
                         effective_monthly_weight = float(weight_row["weight_final"])
                         weight_method_version = str(weight_row["method_version"])
                         usage_key = (symbol, effective_month)
@@ -329,6 +342,9 @@ class TrainingSnapshotService:
                                 "symbol": symbol,
                                 "effective_month": effective_month,
                                 "quality_pass": quality_pass,
+                                "supervised_eligible": supervised_eligible,
+                                "eligibility_mode": eligibility_mode,
+                                "anchor_month": anchor_month,
                                 "weight_final": effective_monthly_weight,
                                 "method_version": weight_method_version,
                                 "rows_total": 0,
@@ -346,7 +362,7 @@ class TrainingSnapshotService:
                     elif dataset == "combined" and (source == "synthetic_gap_fill" or next_gap_fill):
                         row_status = "continuity_only"
                         label_available = False
-                    elif dataset == "combined" and synthetic_source and not quality_pass:
+                    elif dataset == "combined" and synthetic_source and not supervised_eligible:
                         row_status = "continuity_only"
                         label_available = False
 

@@ -37,6 +37,8 @@ Authoritative docs:
 - `qtbot data-calibrate-weights --from YYYY-MM-DD --to YYYY-MM-DD --timeframe 15m --refresh monthly`
 - `qtbot data-weight-status --timeframe 15m`
 - `qtbot build-snapshot --asof <ISO_TIME> --timeframe 15m`
+- `qtbot train --snapshot <SNAPSHOT_ID> --folds <N> --universe V1`
+- `qtbot eval --run <RUN_ID>`
 
 Defaults:
 - `data-backfill` defaults to `--sources ndax,binance`
@@ -70,7 +72,7 @@ PYTHONPATH=src python3 -m qtbot staging-validate --offline-only --budget 1000 --
 PYTHONPATH=src python3 -m qtbot cutover-checklist --offline-only --budget 250 --staging-max-age-hours 168
 ```
 
-## End-to-End Data Workflow (Implemented Through Phase 5)
+## End-to-End Data Workflow (Implemented Through Phase 6)
 
 ### Step 1: Backfill raw NDAX + Binance 15m data
 ```bash
@@ -127,27 +129,43 @@ Snapshot output:
 Snapshot supervision notes:
 - `synthetic_gap_fill` rows are retained for continuity/audit.
 - `synthetic_gap_fill` rows, and rows whose next bar is `synthetic_gap_fill`, are excluded from supervised labels.
+- synthetic supervision is enabled only when `synthetic_weights.supervised_eligible=true`.
+- direct-quality months use `eligibility_mode=direct`; zero-overlap carry-forward months use `eligibility_mode=carry_forward`.
+
+### Step 6: Train and evaluate walk-forward models
+```bash
+PYTHONPATH=src python3 -m qtbot train --snapshot <SNAPSHOT_ID> --folds 12 --universe V1
+PYTHONPATH=src python3 -m qtbot eval --run <RUN_ID>
+```
+
+Training artifacts:
+- `runtime/research/training/<RUN_ID>/manifest.json`
+- `runtime/research/training/<RUN_ID>/feature_spec.json`
+- `runtime/research/training/<RUN_ID>/folds.json`
+- `runtime/research/training/<RUN_ID>/metrics.json`
+- `runtime/research/training/<RUN_ID>/predictions/fold_<NN>/<scenario>.parquet`
+- `runtime/research/training/<RUN_ID>/models/global/<scenario>/fold_<NN>.txt`
+- `runtime/research/training/<RUN_ID>/models/per_coin/<SYMBOL>/<scenario>/fold_<NN>.txt`
 
 ## Next Steps to Final Production ML (Current -> Final)
 
 Current program status:
-- Implemented now: dual-source ingestion, combined CAD build, monthly calibration weighting, and weighted training snapshot integration.
-- Next active build phase: walk-forward training/evaluation (see `docs/PLAN.md` phases 6-9).
+- Implemented now: dual-source ingestion, combined CAD build, monthly calibration weighting, weighted training snapshot integration, and walk-forward training/evaluation.
+- Next active build phase: promotion gates and model bundle publishing (see `docs/PLAN.md` phases 7-9).
 
 Execution sequence:
 1. Keep data current:
-   - rerun `data-backfill`, `data-build-combined`, `data-calibrate-weights`, and `build-snapshot` for the latest cutoff.
-2. Implement walk-forward training/evaluation (Phase 6).
-3. Implement promotion gates and model bundle publishing (Phase 7).
-4. Implement live ML inference path with observe-only fallback (Phase 8).
-5. Complete staging/cutover evidence and rollback drill, then enable ML live path (Phase 9).
+   - rerun `data-backfill`, `data-build-combined`, `data-calibrate-weights`, `build-snapshot`, `train`, and `eval` for the latest cutoff.
+2. Implement promotion gates and model bundle publishing (Phase 7).
+3. Implement live ML inference path with observe-only fallback (Phase 8).
+4. Complete staging/cutover evidence and rollback drill, then enable ML live path (Phase 9).
 
-Implemented Phase 5 command:
+Implemented Phase 6 commands:
 - `qtbot build-snapshot --asof <ISO_TIME>`
-
-Planned CLI commands for the remaining phases (not fully implemented yet):
 - `qtbot train --snapshot <SNAPSHOT_ID> --folds <N> --universe V1`
 - `qtbot eval --run <RUN_ID>`
+
+Planned CLI commands for the remaining phases (not fully implemented yet):
 - `qtbot promote --run <RUN_ID>`
 - `qtbot model-status`
 - `qtbot predict --symbol <SYM> --at latest`
@@ -185,6 +203,11 @@ All `data/` paths below are local-only and ignored by git:
 - `QTBOT_CONVERSION_MAX_MEDIAN_APE=0.015`
 - `QTBOT_COMBINED_MAX_GAP_COUNT=0`
 - `QTBOT_COMBINED_MIN_COVERAGE=0.999`
+- `QTBOT_TRAIN_SEED=42`
+- `QTBOT_TRAIN_WINDOW_MONTHS=12`
+- `QTBOT_VALID_WINDOW_MONTHS=1`
+- `QTBOT_TRAIN_STEP_MONTHS=1`
+- `QTBOT_FEE_PCT_PER_SIDE` defaults to `QTBOT_TAKER_FEE_RATE`
 
 ## Docker Usage
 

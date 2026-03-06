@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 import sqlite3
 from typing import Iterator
@@ -1003,6 +1004,9 @@ class StateStore:
         overlap_rows: int,
         quality_pass: bool,
         method_version: str,
+        supervised_eligible: bool = False,
+        eligibility_mode: str = "blocked",
+        anchor_month: str | None = None,
     ) -> None:
         now = utc_now_iso()
         with self._connect() as conn:
@@ -1011,9 +1015,10 @@ class StateStore:
                 """
                 INSERT INTO synthetic_weights (
                     symbol, timeframe, effective_month, weight_quality, weight_backtest,
-                    weight_final, overlap_rows, quality_pass, method_version, updated_at_utc
+                    weight_final, overlap_rows, quality_pass, method_version,
+                    supervised_eligible, eligibility_mode, anchor_month, updated_at_utc
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(symbol, timeframe, effective_month) DO UPDATE SET
                     weight_quality = excluded.weight_quality,
                     weight_backtest = excluded.weight_backtest,
@@ -1021,6 +1026,9 @@ class StateStore:
                     overlap_rows = excluded.overlap_rows,
                     quality_pass = excluded.quality_pass,
                     method_version = excluded.method_version,
+                    supervised_eligible = excluded.supervised_eligible,
+                    eligibility_mode = excluded.eligibility_mode,
+                    anchor_month = excluded.anchor_month,
                     updated_at_utc = excluded.updated_at_utc
                 """,
                 (
@@ -1033,6 +1041,9 @@ class StateStore:
                     int(overlap_rows),
                     int(bool(quality_pass)),
                     method_version.strip(),
+                    int(bool(supervised_eligible)),
+                    eligibility_mode.strip().lower(),
+                    anchor_month,
                     now,
                 ),
             )
@@ -1046,7 +1057,8 @@ class StateStore:
                 rows = conn.execute(
                     """
                     SELECT symbol, timeframe, effective_month, weight_quality, weight_backtest,
-                           weight_final, overlap_rows, quality_pass, method_version, updated_at_utc
+                           weight_final, overlap_rows, quality_pass, method_version,
+                           supervised_eligible, eligibility_mode, anchor_month, updated_at_utc
                     FROM synthetic_weights
                     ORDER BY symbol, timeframe, effective_month
                     """
@@ -1055,13 +1067,267 @@ class StateStore:
                 rows = conn.execute(
                     """
                     SELECT symbol, timeframe, effective_month, weight_quality, weight_backtest,
-                           weight_final, overlap_rows, quality_pass, method_version, updated_at_utc
+                           weight_final, overlap_rows, quality_pass, method_version,
+                           supervised_eligible, eligibility_mode, anchor_month, updated_at_utc
                     FROM synthetic_weights
                     WHERE timeframe = ?
                     ORDER BY symbol, effective_month
                     """,
                     (timeframe.strip().lower(),),
                 ).fetchall()
+            return [dict(row) for row in rows]
+
+    def upsert_training_run(
+        self,
+        *,
+        run_id: str,
+        snapshot_id: str,
+        dataset_hash: str,
+        feature_spec_hash: str,
+        seed: int,
+        timeframe: str,
+        train_window_months: int,
+        valid_window_months: int,
+        train_step_months: int,
+        folds_requested: int,
+        folds_built: int,
+        status: str,
+        artifact_dir: str,
+        primary_scenario: str | None = None,
+        scenario_status: dict[str, object] | None = None,
+        metrics_summary: dict[str, object] | None = None,
+    ) -> None:
+        now = utc_now_iso()
+        with self._connect() as conn:
+            self._apply_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO training_runs (
+                    run_id, snapshot_id, dataset_hash, feature_spec_hash, seed, timeframe,
+                    train_window_months, valid_window_months, train_step_months,
+                    folds_requested, folds_built, status, artifact_dir,
+                    primary_scenario, scenario_status_json, metrics_summary_json, updated_at_utc
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    snapshot_id = excluded.snapshot_id,
+                    dataset_hash = excluded.dataset_hash,
+                    feature_spec_hash = excluded.feature_spec_hash,
+                    seed = excluded.seed,
+                    timeframe = excluded.timeframe,
+                    train_window_months = excluded.train_window_months,
+                    valid_window_months = excluded.valid_window_months,
+                    train_step_months = excluded.train_step_months,
+                    folds_requested = excluded.folds_requested,
+                    folds_built = excluded.folds_built,
+                    status = excluded.status,
+                    artifact_dir = excluded.artifact_dir,
+                    primary_scenario = excluded.primary_scenario,
+                    scenario_status_json = excluded.scenario_status_json,
+                    metrics_summary_json = excluded.metrics_summary_json,
+                    updated_at_utc = excluded.updated_at_utc
+                """,
+                (
+                    run_id,
+                    snapshot_id,
+                    dataset_hash,
+                    feature_spec_hash,
+                    int(seed),
+                    timeframe.strip().lower(),
+                    int(train_window_months),
+                    int(valid_window_months),
+                    int(train_step_months),
+                    int(folds_requested),
+                    int(folds_built),
+                    status.strip().lower(),
+                    artifact_dir,
+                    primary_scenario,
+                    json.dumps(scenario_status or {}, sort_keys=True),
+                    json.dumps(metrics_summary or {}, sort_keys=True),
+                    now,
+                ),
+            )
+
+    def get_training_run(self, *, run_id: str) -> dict[str, object] | None:
+        if not self._db_path.exists():
+            return None
+        with self._connect() as conn:
+            self._apply_schema(conn)
+            row = conn.execute(
+                """
+                SELECT run_id, snapshot_id, dataset_hash, feature_spec_hash, seed, timeframe,
+                       train_window_months, valid_window_months, train_step_months,
+                       folds_requested, folds_built, status, artifact_dir,
+                       primary_scenario, scenario_status_json, metrics_summary_json, updated_at_utc
+                FROM training_runs
+                WHERE run_id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            payload = dict(row)
+            payload["scenario_status"] = json.loads(str(payload.pop("scenario_status_json") or "{}"))
+            payload["metrics_summary"] = json.loads(str(payload.pop("metrics_summary_json") or "{}"))
+            return payload
+
+    def upsert_training_fold(
+        self,
+        *,
+        run_id: str,
+        fold_index: int,
+        train_start_month: str,
+        train_end_month: str,
+        valid_start_month: str,
+        valid_end_month: str,
+        train_rows: int,
+        valid_rows: int,
+        source_mix: dict[str, int],
+        per_coin_skip_reasons: dict[str, object],
+        artifact_dir: str,
+        status: str,
+    ) -> None:
+        now = utc_now_iso()
+        with self._connect() as conn:
+            self._apply_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO training_folds (
+                    run_id, fold_index, train_start_month, train_end_month, valid_start_month,
+                    valid_end_month, train_rows, valid_rows, source_mix_json,
+                    per_coin_skip_reasons_json, artifact_dir, status, updated_at_utc
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id, fold_index) DO UPDATE SET
+                    train_start_month = excluded.train_start_month,
+                    train_end_month = excluded.train_end_month,
+                    valid_start_month = excluded.valid_start_month,
+                    valid_end_month = excluded.valid_end_month,
+                    train_rows = excluded.train_rows,
+                    valid_rows = excluded.valid_rows,
+                    source_mix_json = excluded.source_mix_json,
+                    per_coin_skip_reasons_json = excluded.per_coin_skip_reasons_json,
+                    artifact_dir = excluded.artifact_dir,
+                    status = excluded.status,
+                    updated_at_utc = excluded.updated_at_utc
+                """,
+                (
+                    run_id,
+                    int(fold_index),
+                    train_start_month,
+                    train_end_month,
+                    valid_start_month,
+                    valid_end_month,
+                    int(train_rows),
+                    int(valid_rows),
+                    json.dumps(source_mix, sort_keys=True),
+                    json.dumps(per_coin_skip_reasons, sort_keys=True),
+                    artifact_dir,
+                    status.strip().lower(),
+                    now,
+                ),
+            )
+
+    def get_training_folds(self, *, run_id: str) -> list[dict[str, object]]:
+        if not self._db_path.exists():
+            return []
+        with self._connect() as conn:
+            self._apply_schema(conn)
+            rows = conn.execute(
+                """
+                SELECT run_id, fold_index, train_start_month, train_end_month, valid_start_month,
+                       valid_end_month, train_rows, valid_rows, source_mix_json,
+                       per_coin_skip_reasons_json, artifact_dir, status, updated_at_utc
+                FROM training_folds
+                WHERE run_id = ?
+                ORDER BY fold_index
+                """,
+                (run_id,),
+            ).fetchall()
+            payloads: list[dict[str, object]] = []
+            for row in rows:
+                payload = dict(row)
+                payload["source_mix"] = json.loads(str(payload.pop("source_mix_json") or "{}"))
+                payload["per_coin_skip_reasons"] = json.loads(
+                    str(payload.pop("per_coin_skip_reasons_json") or "{}")
+                )
+                payloads.append(payload)
+            return payloads
+
+    def delete_fold_metrics(self, *, run_id: str) -> None:
+        with self._connect() as conn:
+            self._apply_schema(conn)
+            conn.execute("DELETE FROM fold_metrics WHERE run_id = ?", (run_id,))
+
+    def insert_fold_metric(
+        self,
+        *,
+        run_id: str,
+        fold_index: int,
+        scenario: str,
+        model_scope: str,
+        split: str,
+        row_count: int,
+        trades: int,
+        gross_return: float,
+        net_return: float,
+        win_rate: float | None,
+        max_drawdown: float | None,
+        logloss: float | None,
+        roc_auc: float | None,
+        pr_auc: float | None,
+        brier: float | None,
+        symbol: str | None = None,
+    ) -> None:
+        now = utc_now_iso()
+        with self._connect() as conn:
+            self._apply_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO fold_metrics (
+                    run_id, fold_index, scenario, model_scope, symbol, split,
+                    row_count, trades, gross_return, net_return, win_rate,
+                    max_drawdown, logloss, roc_auc, pr_auc, brier, updated_at_utc
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    int(fold_index),
+                    scenario.strip().lower(),
+                    model_scope.strip().lower(),
+                    symbol.strip().upper() if symbol else None,
+                    split.strip().lower(),
+                    int(row_count),
+                    int(trades),
+                    float(gross_return),
+                    float(net_return),
+                    None if win_rate is None else float(win_rate),
+                    None if max_drawdown is None else float(max_drawdown),
+                    None if logloss is None else float(logloss),
+                    None if roc_auc is None else float(roc_auc),
+                    None if pr_auc is None else float(pr_auc),
+                    None if brier is None else float(brier),
+                    now,
+                ),
+            )
+
+    def get_fold_metrics(self, *, run_id: str) -> list[dict[str, object]]:
+        if not self._db_path.exists():
+            return []
+        with self._connect() as conn:
+            self._apply_schema(conn)
+            rows = conn.execute(
+                """
+                SELECT run_id, fold_index, scenario, model_scope, symbol, split,
+                       row_count, trades, gross_return, net_return, win_rate,
+                       max_drawdown, logloss, roc_auc, pr_auc, brier, updated_at_utc
+                FROM fold_metrics
+                WHERE run_id = ?
+                ORDER BY fold_index, scenario, model_scope, symbol, split
+                """,
+                (run_id,),
+            ).fetchall()
             return [dict(row) for row in rows]
 
     def insert_combined_build(
@@ -1263,10 +1529,31 @@ class StateStore:
                 overlap_rows INTEGER NOT NULL,
                 quality_pass INTEGER NOT NULL,
                 method_version TEXT NOT NULL,
+                supervised_eligible INTEGER NOT NULL DEFAULT 0,
+                eligibility_mode TEXT NOT NULL DEFAULT 'blocked',
+                anchor_month TEXT,
                 updated_at_utc TEXT NOT NULL,
                 PRIMARY KEY(symbol, timeframe, effective_month)
             )
             """
+        )
+        self._ensure_column(
+            conn,
+            table_name="synthetic_weights",
+            column_name="supervised_eligible",
+            ddl="ALTER TABLE synthetic_weights ADD COLUMN supervised_eligible INTEGER NOT NULL DEFAULT 0",
+        )
+        self._ensure_column(
+            conn,
+            table_name="synthetic_weights",
+            column_name="eligibility_mode",
+            ddl="ALTER TABLE synthetic_weights ADD COLUMN eligibility_mode TEXT NOT NULL DEFAULT 'blocked'",
+        )
+        self._ensure_column(
+            conn,
+            table_name="synthetic_weights",
+            column_name="anchor_month",
+            ddl="ALTER TABLE synthetic_weights ADD COLUMN anchor_month TEXT",
         )
         conn.execute(
             """
@@ -1287,6 +1574,73 @@ class StateStore:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS training_runs (
+                run_id TEXT PRIMARY KEY,
+                snapshot_id TEXT NOT NULL,
+                dataset_hash TEXT NOT NULL,
+                feature_spec_hash TEXT NOT NULL,
+                seed INTEGER NOT NULL,
+                timeframe TEXT NOT NULL,
+                train_window_months INTEGER NOT NULL,
+                valid_window_months INTEGER NOT NULL,
+                train_step_months INTEGER NOT NULL,
+                folds_requested INTEGER NOT NULL,
+                folds_built INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                artifact_dir TEXT NOT NULL,
+                primary_scenario TEXT,
+                scenario_status_json TEXT NOT NULL,
+                metrics_summary_json TEXT NOT NULL,
+                updated_at_utc TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS training_folds (
+                run_id TEXT NOT NULL,
+                fold_index INTEGER NOT NULL,
+                train_start_month TEXT NOT NULL,
+                train_end_month TEXT NOT NULL,
+                valid_start_month TEXT NOT NULL,
+                valid_end_month TEXT NOT NULL,
+                train_rows INTEGER NOT NULL,
+                valid_rows INTEGER NOT NULL,
+                source_mix_json TEXT NOT NULL,
+                per_coin_skip_reasons_json TEXT NOT NULL,
+                artifact_dir TEXT NOT NULL,
+                status TEXT NOT NULL,
+                updated_at_utc TEXT NOT NULL,
+                PRIMARY KEY(run_id, fold_index)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fold_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                fold_index INTEGER NOT NULL,
+                scenario TEXT NOT NULL,
+                model_scope TEXT NOT NULL,
+                symbol TEXT,
+                split TEXT NOT NULL,
+                row_count INTEGER NOT NULL,
+                trades INTEGER NOT NULL,
+                gross_return REAL NOT NULL,
+                net_return REAL NOT NULL,
+                win_rate REAL,
+                max_drawdown REAL,
+                logloss REAL,
+                roc_auc REAL,
+                pr_auc REAL,
+                brier REAL,
+                updated_at_utc TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_conversion_quality_symbol_tf_period
             ON conversion_quality(symbol, timeframe, period_start)
             """
@@ -1295,6 +1649,18 @@ class StateStore:
             """
             CREATE INDEX IF NOT EXISTS idx_combined_builds_symbol_tf_time
             ON combined_builds(symbol, timeframe, from_ts, to_ts)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_training_folds_run
+            ON training_folds(run_id, fold_index)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_fold_metrics_run
+            ON fold_metrics(run_id, fold_index, scenario, model_scope, split)
             """
         )
 

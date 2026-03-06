@@ -316,10 +316,16 @@ class StateStoreTests(unittest.TestCase):
                 overlap_rows=1200,
                 quality_pass=True,
                 method_version="v1",
+                supervised_eligible=True,
+                eligibility_mode="direct",
+                anchor_month="2026-01",
             )
             weights = store.get_synthetic_weights(timeframe="15m")
             self.assertEqual(len(weights), 1)
             self.assertEqual(weights[0]["effective_month"], "2026-01")
+            self.assertEqual(int(weights[0]["supervised_eligible"]), 1)
+            self.assertEqual(weights[0]["eligibility_mode"], "direct")
+            self.assertEqual(weights[0]["anchor_month"], "2026-01")
 
             store.insert_combined_build(
                 symbol="BTCCAD",
@@ -332,6 +338,67 @@ class StateStoreTests(unittest.TestCase):
                 gap_count=0,
                 build_hash="abc123",
             )
+
+            store.upsert_training_run(
+                run_id="run123",
+                snapshot_id="snap123",
+                dataset_hash="datahash",
+                feature_spec_hash="featurehash",
+                seed=42,
+                timeframe="15m",
+                train_window_months=12,
+                valid_window_months=1,
+                train_step_months=1,
+                folds_requested=2,
+                folds_built=2,
+                status="trained",
+                artifact_dir="/tmp/run123",
+                scenario_status={"weighted_combined": {"status": "trained"}},
+                metrics_summary={"weighted_combined": {"global": {"net_return": 0.1}}},
+            )
+            training_run = store.get_training_run(run_id="run123")
+            assert training_run is not None
+            self.assertEqual(training_run["snapshot_id"], "snap123")
+            self.assertEqual(training_run["scenario_status"]["weighted_combined"]["status"], "trained")
+
+            store.upsert_training_fold(
+                run_id="run123",
+                fold_index=1,
+                train_start_month="2025-01",
+                train_end_month="2025-12",
+                valid_start_month="2026-01",
+                valid_end_month="2026-01",
+                train_rows=1200,
+                valid_rows=100,
+                source_mix={"train_ndax": 800, "valid_synthetic": 20},
+                per_coin_skip_reasons={"ETHCAD": {"weighted_combined": "train_rows_lt_1000"}},
+                artifact_dir="/tmp/run123/fold_01",
+                status="trained",
+            )
+            training_folds = store.get_training_folds(run_id="run123")
+            self.assertEqual(len(training_folds), 1)
+            self.assertEqual(training_folds[0]["source_mix"]["train_ndax"], 800)
+
+            store.insert_fold_metric(
+                run_id="run123",
+                fold_index=1,
+                scenario="weighted_combined",
+                model_scope="global",
+                split="all",
+                row_count=100,
+                trades=20,
+                gross_return=0.4,
+                net_return=0.3,
+                win_rate=0.55,
+                max_drawdown=0.1,
+                logloss=0.62,
+                roc_auc=0.71,
+                pr_auc=0.69,
+                brier=0.21,
+            )
+            fold_metrics = store.get_fold_metrics(run_id="run123")
+            self.assertEqual(len(fold_metrics), 1)
+            self.assertEqual(fold_metrics[0]["scenario"], "weighted_combined")
 
 
 if __name__ == "__main__":

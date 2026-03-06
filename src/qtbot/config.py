@@ -61,6 +61,11 @@ class RuntimeConfig:
     conversion_max_median_ape: float
     combined_max_gap_count: int
     combined_min_coverage: float
+    train_seed: int
+    train_window_months: int
+    valid_window_months: int
+    train_step_months: int
+    fee_pct_per_side: float
 
 
 def load_runtime_config() -> RuntimeConfig:
@@ -212,6 +217,22 @@ def load_runtime_config() -> RuntimeConfig:
     if not (0 < combined_min_coverage <= 1):
         raise ValueError("QTBOT_COMBINED_MIN_COVERAGE must be in (0,1].")
 
+    train_seed = int(os.getenv("QTBOT_TRAIN_SEED", "42"))
+
+    train_window_months = int(os.getenv("QTBOT_TRAIN_WINDOW_MONTHS", "12"))
+    valid_window_months = int(os.getenv("QTBOT_VALID_WINDOW_MONTHS", "1"))
+    train_step_months = int(os.getenv("QTBOT_TRAIN_STEP_MONTHS", "1"))
+    if train_window_months <= 0:
+        raise ValueError("QTBOT_TRAIN_WINDOW_MONTHS must be > 0.")
+    if valid_window_months <= 0:
+        raise ValueError("QTBOT_VALID_WINDOW_MONTHS must be > 0.")
+    if train_step_months <= 0:
+        raise ValueError("QTBOT_TRAIN_STEP_MONTHS must be > 0.")
+
+    fee_pct_per_side = float(os.getenv("QTBOT_FEE_PCT_PER_SIDE", str(taker_fee_rate)))
+    if not (0 <= fee_pct_per_side < 1):
+        raise ValueError("QTBOT_FEE_PCT_PER_SIDE must be in [0,1).")
+
     runtime_dir = _resolve_runtime_dir(os.getenv("QTBOT_RUNTIME_DIR", "runtime"))
     return RuntimeConfig(
         cadence_seconds=cadence_seconds,
@@ -257,6 +278,11 @@ def load_runtime_config() -> RuntimeConfig:
         conversion_max_median_ape=conversion_max_median_ape,
         combined_max_gap_count=combined_max_gap_count,
         combined_min_coverage=combined_min_coverage,
+        train_seed=train_seed,
+        train_window_months=train_window_months,
+        valid_window_months=valid_window_months,
+        train_step_months=train_step_months,
+        fee_pct_per_side=fee_pct_per_side,
     )
 
 
