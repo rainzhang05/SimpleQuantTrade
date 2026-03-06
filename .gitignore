@@ -203,8 +203,13 @@ cython_debug/
 
 # Runtime artifacts
 runtime/
+runtime_prod/
 
 # Marimo
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# macOS metadata
+.DS_Store
+**/.DS_Store
