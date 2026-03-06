@@ -191,7 +191,7 @@ Refresh cadence:
 
 Eligibility metadata persisted per symbol-month:
 - `supervised_eligible`
-- `eligibility_mode` in `{direct, carry_forward, blocked}`
+- `eligibility_mode` in `{direct, carry_backward, carry_forward, blocked}`
 - `anchor_month`
 
 ## 7) Training Label and Feature Contracts (Phased)
@@ -230,7 +230,8 @@ Phase 5 weighting rules:
 - synthetic rows use monthly `w_final`
 - synthetic supervision is gated by `synthetic_weights.supervised_eligible`, not raw `quality_pass`
 - direct qualifying months use `eligibility_mode=direct`
-- zero-overlap months may reuse the nearest prior qualifying same-symbol month as `eligibility_mode=carry_forward`
+- zero-overlap months before the first qualifying same-symbol month may reuse that future anchor as `eligibility_mode=carry_backward`
+- zero-overlap months after a qualifying same-symbol month may reuse the nearest prior anchor as `eligibility_mode=carry_forward`
 - synthetic rows with no qualifying anchor remain `row_status=continuity_only`
 - `synthetic_gap_fill` rows, and rows whose next bar is `synthetic_gap_fill`, remain continuity-only
 - `supervised_row_weight=0.0` when `label_available=false`

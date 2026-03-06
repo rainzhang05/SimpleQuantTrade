@@ -102,8 +102,8 @@ class _FakeBinanceClient:
     @staticmethod
     def _generate_rows(*, start_ts_ms: int, periods: int, seed: float) -> list[list[float]]:
         rows: list[list[float]] = []
-        for idx in range(periods):
-            ts = start_ts_ms + (idx * 900_000)
+        for idx in range(periods + 1):
+            ts = start_ts_ms - 900_000 + (idx * 900_000)
             price = seed + (idx * 0.07)
             rows.append(
                 [
@@ -163,7 +163,8 @@ def _generate_binance_from_close_map(
     rows: list[list[float]] = []
     for idx, ts in enumerate(timestamps):
         close = float(close_fn(idx))
-        rows.append([ts, close, close, close, close, 20.0 + idx, ts + 899_999, 0.0, 0, 0.0, 0.0, 0.0])
+        raw_ts = ts - 900_000
+        rows.append([raw_ts, close, close, close, close, 20.0 + idx, raw_ts + 899_999, 0.0, 0, 0.0, 0.0, 0.0])
     return rows
 
 
@@ -183,6 +184,7 @@ class _FakeNdaxClientCarryForward:
             {"Product1Symbol": "BCH", "Product2Symbol": "CAD", "Symbol": "BCHCAD", "InstrumentId": 2},
             {"Product1Symbol": "USDT", "Product2Symbol": "CAD", "Symbol": "USDTCAD", "InstrumentId": 3},
         ]
+        december = _segment_timestamps(year=2025, month=12, day_count=3)
         january = _segment_timestamps(year=2026, month=1, day_count=3)
         february = _segment_timestamps(year=2026, month=2, day_count=3)
         self._rows_by_instrument = {
@@ -193,7 +195,7 @@ class _FakeNdaxClientCarryForward:
             ),
             2: [],
             3: _generate_ndax_from_close_map(
-                timestamps=january + february,
+                timestamps=december + january + february,
                 close_fn=lambda idx: 2.0,
                 instrument_id=3,
             ),
@@ -215,16 +217,17 @@ class _FakeNdaxClientCarryForward:
 
 class _FakeBinanceClientCarryForward:
     def __init__(self) -> None:
+        december = _segment_timestamps(year=2025, month=12, day_count=3)
         january = _segment_timestamps(year=2026, month=1, day_count=3)
         february = _segment_timestamps(year=2026, month=2, day_count=3)
         self._symbols = {"BTCUSDT", "BCHUSDT"}
         self._rows_by_symbol = {
             "BTCUSDT": _generate_binance_from_close_map(
-                timestamps=january + february,
+                timestamps=december + january + february,
                 close_fn=lambda idx: 50.0 + (idx * 0.05),
             ),
             "BCHUSDT": _generate_binance_from_close_map(
-                timestamps=january + february,
+                timestamps=december + january + february,
                 close_fn=lambda idx: 25.0 + (idx * 0.03),
             ),
         }
@@ -458,7 +461,7 @@ class DataServiceTests(unittest.TestCase):
             weights = service.weight_status(timeframe="15m")
             self.assertGreaterEqual(weights.row_count, 1)
 
-    def test_calibrate_weights_marks_direct_carry_forward_and_blocked_months(self) -> None:
+    def test_calibrate_weights_marks_direct_backward_forward_and_blocked_months(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = make_runtime_config(Path(td))
             store = StateStore(cfg.state_db)
@@ -470,18 +473,18 @@ class DataServiceTests(unittest.TestCase):
             )
 
             service.backfill(
-                from_date=date(2026, 1, 1),
+                from_date=date(2025, 12, 1),
                 to_date=date(2026, 2, 3),
                 timeframe="15m",
                 sources=["ndax", "binance"],
             )
             service.build_combined(
-                from_date=date(2026, 1, 1),
+                from_date=date(2025, 12, 1),
                 to_date=date(2026, 2, 3),
                 timeframe="15m",
             )
             service.calibrate_weights(
-                from_date=date(2026, 1, 1),
+                from_date=date(2025, 12, 1),
                 to_date=date(2026, 2, 3),
                 timeframe="15m",
                 refresh="monthly",
@@ -491,9 +494,14 @@ class DataServiceTests(unittest.TestCase):
                 (row["symbol"], row["effective_month"]): row
                 for row in store.get_synthetic_weights(timeframe="15m")
             }
+            btc_dec = weights[("BTCCAD", "2025-12")]
             btc_jan = weights[("BTCCAD", "2026-01")]
             btc_feb = weights[("BTCCAD", "2026-02")]
-            bch_jan = weights[("BCHCAD", "2026-01")]
+            bch_dec = weights[("BCHCAD", "2025-12")]
+
+            self.assertEqual(int(btc_dec["supervised_eligible"]), 1)
+            self.assertEqual(btc_dec["eligibility_mode"], "carry_backward")
+            self.assertEqual(btc_dec["anchor_month"], "2026-01")
 
             self.assertEqual(int(btc_jan["supervised_eligible"]), 1)
             self.assertEqual(btc_jan["eligibility_mode"], "direct")
@@ -503,9 +511,9 @@ class DataServiceTests(unittest.TestCase):
             self.assertEqual(btc_feb["eligibility_mode"], "carry_forward")
             self.assertEqual(btc_feb["anchor_month"], "2026-01")
 
-            self.assertEqual(int(bch_jan["supervised_eligible"]), 0)
-            self.assertEqual(bch_jan["eligibility_mode"], "blocked")
-            self.assertIsNone(bch_jan["anchor_month"])
+            self.assertEqual(int(bch_dec["supervised_eligible"]), 0)
+            self.assertEqual(bch_dec["eligibility_mode"], "blocked")
+            self.assertIsNone(bch_dec["anchor_month"])
 
 
 if __name__ == "__main__":

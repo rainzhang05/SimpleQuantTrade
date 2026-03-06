@@ -769,15 +769,28 @@ class MarketDataService:
 
         eligible_rows: list[CalibrationWeightRow] = []
         for symbol in sorted(finalized_by_symbol):
-            anchor_month: str | None = None
-            for row in sorted(finalized_by_symbol[symbol], key=lambda item: item.effective_month):
+            rows_for_symbol = sorted(finalized_by_symbol[symbol], key=lambda item: item.effective_month)
+            direct_anchor_months = [
+                row.effective_month
+                for row in rows_for_symbol
                 if _direct_supervised_eligible(
                     overlap_rows=row.overlap_rows,
                     median_ape_close=row.median_ape_close,
                     ret_corr=row.ret_corr,
                     max_median_ape=self._config.conversion_max_median_ape,
                     min_overlap_rows=eligibility_overlap_min,
-                ):
+                )
+            ]
+            anchor_month: str | None = None
+            for row in rows_for_symbol:
+                direct_eligible = _direct_supervised_eligible(
+                    overlap_rows=row.overlap_rows,
+                    median_ape_close=row.median_ape_close,
+                    ret_corr=row.ret_corr,
+                    max_median_ape=self._config.conversion_max_median_ape,
+                    min_overlap_rows=eligibility_overlap_min,
+                )
+                if direct_eligible:
                     eligible_row = CalibrationWeightRow(
                         symbol=row.symbol,
                         effective_month=row.effective_month,
@@ -820,6 +833,34 @@ class MarketDataService:
                         anchor_month=anchor_month,
                         report_note=row.report_note,
                     )
+                elif row.overlap_rows == 0:
+                    backward_anchor = next(
+                        (month for month in direct_anchor_months if month > row.effective_month),
+                        None,
+                    )
+                    if backward_anchor is not None:
+                        eligible_row = CalibrationWeightRow(
+                            symbol=row.symbol,
+                            effective_month=row.effective_month,
+                            overlap_rows=row.overlap_rows,
+                            median_ape_close=row.median_ape_close,
+                            median_abs_ret_err=row.median_abs_ret_err,
+                            ret_corr=row.ret_corr,
+                            direction_match=row.direction_match,
+                            basis_median=row.basis_median,
+                            basis_mad=row.basis_mad,
+                            quality_score=row.quality_score,
+                            quality_pass=row.quality_pass,
+                            weight_quality=row.weight_quality,
+                            weight_backtest=row.weight_backtest,
+                            weight_final=row.weight_final,
+                            supervised_eligible=True,
+                            eligibility_mode="carry_backward",
+                            anchor_month=backward_anchor,
+                            report_note=row.report_note,
+                        )
+                    else:
+                        eligible_row = row
                 else:
                     eligible_row = row
 
@@ -1204,7 +1245,7 @@ class MarketDataService:
         max_iterations = ((_expected_count(from_date, to_date, interval_seconds) // _BINANCE_PAGE_LIMIT) + 4) * 3
 
         while cursor < end_exclusive_ms and pages < max_iterations:
-            query_start = max(start_ms, cursor - interval_ms)
+            query_start = max(0, cursor - interval_ms)
             self._emit_progress(
                 "symbol_page_fetch_start "
                 f"source=binance symbol={symbol} page={pages + 1} "
@@ -2083,7 +2124,9 @@ def _parse_binance_rows(
             continue
         if not all(math.isfinite(value) for value in (open_price, high, low, close, volume)):
             continue
-        ts = raw_ts - (raw_ts % interval_ms)
+        # Binance spot klines are keyed by bar open time. Canonicalize them to
+        # the matching bar-close timestamp so they align with NDAX candles.
+        ts = (raw_ts - (raw_ts % interval_ms)) + interval_ms
         result[ts] = {
             "timestamp_ms": ts,
             "open": open_price,

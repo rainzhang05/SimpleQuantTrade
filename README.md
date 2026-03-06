@@ -130,7 +130,9 @@ Snapshot supervision notes:
 - `synthetic_gap_fill` rows are retained for continuity/audit.
 - `synthetic_gap_fill` rows, and rows whose next bar is `synthetic_gap_fill`, are excluded from supervised labels.
 - synthetic supervision is enabled only when `synthetic_weights.supervised_eligible=true`.
-- direct-quality months use `eligibility_mode=direct`; zero-overlap carry-forward months use `eligibility_mode=carry_forward`.
+- direct-quality months use `eligibility_mode=direct`.
+- zero-overlap months before the first same-symbol anchor use `eligibility_mode=carry_backward`.
+- zero-overlap months after an established anchor use `eligibility_mode=carry_forward`.
 
 ### Step 6: Train and evaluate walk-forward models
 ```bash

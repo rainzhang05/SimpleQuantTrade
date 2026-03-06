@@ -189,6 +189,7 @@ This is the official phase where model fitting and evaluation become production-
 - artifact layout under `runtime/research/training/<RUN_ID>/`
 - synthetic supervision repair:
   - direct eligible months
+  - carry-backward eligibility from nearest qualifying future same-symbol month for pre-overlap history
   - carry-forward eligibility from nearest prior qualifying same-symbol month
   - blocked synthetic rows remain continuity-only
 

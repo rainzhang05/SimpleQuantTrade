@@ -443,6 +443,63 @@ class SnapshotTests(unittest.TestCase):
             self.assertAlmostEqual(rows[0]["supervised_row_weight"], 0.25)
             self.assertEqual(summary.trainable_row_count, 1)
 
+    def test_build_snapshot_honors_carry_backward_eligibility(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cfg = make_runtime_config(root)
+            store = StateStore(cfg.state_db)
+            service = TrainingSnapshotService(config=cfg, state_store=store)
+
+            combined_dir = root / "data" / "combined" / "15m"
+            _write_market_rows(
+                combined_dir / "BTCCAD.parquet",
+                [
+                    {
+                        "timestamp_ms": _ts_ms(2025, 12, 1, 0, 0),
+                        "open": 100.0,
+                        "high": 101.0,
+                        "low": 99.0,
+                        "close": 100.0,
+                        "volume": 10.0,
+                        "symbol": "BTCCAD",
+                        "source": "synthetic",
+                    },
+                    {
+                        "timestamp_ms": _ts_ms(2025, 12, 1, 0, 15),
+                        "open": 101.0,
+                        "high": 102.0,
+                        "low": 100.0,
+                        "close": 101.0,
+                        "volume": 11.0,
+                        "symbol": "BTCCAD",
+                        "source": "synthetic",
+                    },
+                ],
+            )
+            store.upsert_synthetic_weight(
+                symbol="BTCCAD",
+                timeframe="15m",
+                effective_month="2025-12",
+                weight_quality=0.25,
+                weight_backtest=0.25,
+                weight_final=0.25,
+                overlap_rows=0,
+                quality_pass=False,
+                method_version="bridge_weight_v1",
+                supervised_eligible=True,
+                eligibility_mode="carry_backward",
+                anchor_month="2026-01",
+            )
+
+            summary = service.build_snapshot(
+                asof=datetime(2025, 12, 1, 0, 45, tzinfo=timezone.utc),
+                timeframe="15m",
+            )
+            rows = pq.read_table(summary.rows_file).to_pylist()
+            self.assertEqual(rows[0]["row_status"], "trainable")
+            self.assertAlmostEqual(rows[0]["supervised_row_weight"], 0.25)
+            self.assertEqual(summary.trainable_row_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
