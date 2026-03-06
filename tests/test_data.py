@@ -116,6 +116,43 @@ class DataServiceTests(unittest.TestCase):
             btc_rows_after = pq.read_table(btc_file).num_rows
             self.assertEqual(btc_rows_after, 96 * 3)
 
+    def test_backfill_expands_backward_range_after_recent_seed(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = make_runtime_config(Path(td))
+            store = StateStore(cfg.state_db)
+            service = MarketDataService(
+                config=cfg,
+                ndax_client=_FakeNdaxClient(),
+                state_store=store,
+            )
+
+            # Seed only the latest day, then request an earlier start date.
+            service.backfill(
+                from_date=date(2026, 1, 3),
+                to_date=date(2026, 1, 3),
+                timeframe="15m",
+            )
+            expanded = service.backfill(
+                from_date=date(2026, 1, 1),
+                to_date=date(2026, 1, 3),
+                timeframe="15m",
+            )
+
+            btc_file = Path(td) / "data" / "raw" / "ndax" / "15m" / "BTCCAD.parquet"
+            btc_rows = pq.read_table(btc_file).num_rows
+            self.assertEqual(btc_rows, 96 * 3)
+
+            # Once complete, rerun should skip chunk fetches for fully covered windows.
+            rerun = service.backfill(
+                from_date=date(2026, 1, 1),
+                to_date=date(2026, 1, 3),
+                timeframe="15m",
+            )
+            btc_expanded = next(item for item in expanded.symbols if item.symbol == "BTCCAD")
+            btc_rerun = next(item for item in rerun.symbols if item.symbol == "BTCCAD")
+            self.assertGreaterEqual(btc_expanded.chunk_count, 1)
+            self.assertEqual(btc_rerun.chunk_count, 0)
+
     def test_data_status_reports_gaps(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = make_runtime_config(Path(td))

@@ -20,7 +20,6 @@ from qtbot.universe import UniverseEntry, resolve_tradable_universe
 
 
 _CHUNK_DAYS = 30
-_RESUME_OVERLAP_DAYS = 1
 _PARQUET_COMPRESSION = "zstd"
 
 
@@ -301,22 +300,41 @@ class MarketDataService:
 
         existing = _read_parquet_records(output_path)
         old_count = len(existing)
-        resume_from = _resolve_resume_from(
+        resume_from = _first_missing_date(
             existing=existing,
             requested_from=from_date,
-            overlap_days=_RESUME_OVERLAP_DAYS,
+            requested_to=to_date,
+            interval_seconds=interval_seconds,
         )
+        if resume_from is None:
+            resume_from = from_date
 
         chunk_count = 0
         fetched_rows = 0
-        chunk_start = resume_from
-        chunks_total = _chunk_count(from_date=resume_from, to_date=to_date)
+        chunk_start = from_date
+        chunks_total = _chunk_count(from_date=from_date, to_date=to_date)
+        chunk_index = 0
         while chunk_start <= to_date:
             chunk_end = min(to_date, chunk_start + timedelta(days=_CHUNK_DAYS - 1))
+            chunk_index += 1
+            if _chunk_has_full_coverage(
+                existing=existing,
+                chunk_start=chunk_start,
+                chunk_end=chunk_end,
+                interval_seconds=interval_seconds,
+            ):
+                self._emit_progress(
+                    "symbol_chunk_skip "
+                    f"symbol={entry.ndax_symbol} chunk={chunk_index}/{chunks_total} "
+                    f"chunk_from={chunk_start.isoformat()} chunk_to={chunk_end.isoformat()} "
+                    "reason=already_complete"
+                )
+                chunk_start = chunk_end + timedelta(days=1)
+                continue
             before_merge_count = len(existing)
             self._emit_progress(
                 "symbol_chunk_fetch_start "
-                f"symbol={entry.ndax_symbol} chunk={chunk_count + 1}/{chunks_total} "
+                f"symbol={entry.ndax_symbol} chunk={chunk_index}/{chunks_total} "
                 f"chunk_from={chunk_start.isoformat()} chunk_to={chunk_end.isoformat()}"
             )
             rows = self._ndax_client.get_ticker_history(
@@ -344,7 +362,7 @@ class MarketDataService:
             after_merge_count = len(existing)
             self._emit_progress(
                 "symbol_chunk "
-                f"symbol={entry.ndax_symbol} chunk={chunk_count}/{chunks_total} "
+                f"symbol={entry.ndax_symbol} chunk={chunk_index}/{chunks_total} "
                 f"chunk_from={chunk_start.isoformat()} chunk_to={chunk_end.isoformat()} "
                 f"fetched_rows={len(rows)} merged_new={max(0, after_merge_count - before_merge_count)}"
             )
@@ -504,13 +522,48 @@ def _timeframe_dir(interval_seconds: int) -> str:
     return f"{interval_seconds}s"
 
 
-def _resolve_resume_from(*, existing: dict[int, dict[str, Any]], requested_from: date, overlap_days: int) -> date:
-    if not existing:
-        return requested_from
-    last_ts = max(existing)
-    last_date = datetime.fromtimestamp(last_ts / 1000, tz=timezone.utc).date()
-    overlap_from = last_date - timedelta(days=max(0, overlap_days))
-    return max(requested_from, overlap_from)
+def _first_missing_date(
+    *,
+    existing: dict[int, dict[str, Any]],
+    requested_from: date,
+    requested_to: date,
+    interval_seconds: int,
+) -> date | None:
+    if requested_from > requested_to:
+        return None
+    start_ms = int(
+        datetime(requested_from.year, requested_from.month, requested_from.day, tzinfo=timezone.utc).timestamp() * 1000
+    )
+    end_exclusive_ms = int(
+        datetime(requested_to.year, requested_to.month, requested_to.day, tzinfo=timezone.utc).timestamp() * 1000
+    ) + 86_400_000
+    step_ms = interval_seconds * 1000
+    ts = start_ms
+    while ts < end_exclusive_ms:
+        if ts not in existing:
+            return datetime.fromtimestamp(ts / 1000, tz=timezone.utc).date()
+        ts += step_ms
+    return None
+
+
+def _chunk_has_full_coverage(
+    *,
+    existing: dict[int, dict[str, Any]],
+    chunk_start: date,
+    chunk_end: date,
+    interval_seconds: int,
+) -> bool:
+    start_ms = int(datetime(chunk_start.year, chunk_start.month, chunk_start.day, tzinfo=timezone.utc).timestamp() * 1000)
+    end_exclusive_ms = int(
+        datetime(chunk_end.year, chunk_end.month, chunk_end.day, tzinfo=timezone.utc).timestamp() * 1000
+    ) + 86_400_000
+    step_ms = interval_seconds * 1000
+    ts = start_ms
+    while ts < end_exclusive_ms:
+        if ts not in existing:
+            return False
+        ts += step_ms
+    return True
 
 
 def _parse_candle_rows(
