@@ -258,6 +258,10 @@ Snapshot hash contract:
 - CLI:
   - `qtbot train --snapshot <SNAPSHOT_ID> --folds <N> --universe V1`
   - `qtbot eval --run <RUN_ID>`
+- Scenario execution rule:
+  - `weighted_combined` is required and must train on every built fold
+  - `ndax_only` is best-effort and may be partial/skipped on folds that lack NDAX train/validate rows or both classes
+  - skipped NDAX benchmark folds are recorded in `training_runs.scenario_status`
 
 Training artifact layout:
 - `runtime/research/training/<RUN_ID>/manifest.json`

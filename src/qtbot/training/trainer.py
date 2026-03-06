@@ -89,8 +89,10 @@ class TrainingService:
             scenario: {
                 "status": "running",
                 "folds_completed": 0,
+                "folds_skipped": 0,
                 "global_models": 0,
                 "per_coin_models": 0,
+                "skip_reasons": [],
             }
             for scenario in _SCENARIOS
         }
@@ -157,6 +159,26 @@ class TrainingService:
             fold_source_mix = _fold_source_mix(train_rows=fold_train, valid_rows=fold_valid)
             per_coin_skip_reasons: dict[str, dict[str, str]] = {}
             for scenario in _SCENARIOS:
+                scenario_skip_reason = _scenario_skip_reason(
+                    train_rows=fold_train,
+                    valid_rows=fold_valid,
+                    scenario=scenario,
+                )
+                if scenario_skip_reason is not None:
+                    if scenario == "weighted_combined":
+                        raise ValueError(
+                            f"fold={fold.fold_index} scenario={scenario} {scenario_skip_reason}"
+                        )
+                    scenario_status[scenario]["folds_skipped"] = int(scenario_status[scenario]["folds_skipped"]) + 1
+                    cast_skip_reasons = scenario_status[scenario]["skip_reasons"]
+                    if isinstance(cast_skip_reasons, list):
+                        cast_skip_reasons.append(
+                            {
+                                "fold_index": fold.fold_index,
+                                "reason": scenario_skip_reason,
+                            }
+                        )
+                    continue
                 scenario_result = self._train_scenario(
                     run_dir=run_dir,
                     fold=fold,
@@ -202,7 +224,16 @@ class TrainingService:
             status="trained",
         )
         for scenario in _SCENARIOS:
-            scenario_status[scenario]["status"] = "trained"
+            folds_completed = int(scenario_status[scenario]["folds_completed"])
+            folds_skipped = int(scenario_status[scenario]["folds_skipped"])
+            if folds_completed == len(fold_defs):
+                scenario_status[scenario]["status"] = "trained"
+            elif folds_completed > 0:
+                scenario_status[scenario]["status"] = "partial"
+            elif folds_skipped > 0:
+                scenario_status[scenario]["status"] = "skipped"
+            else:
+                scenario_status[scenario]["status"] = "skipped"
         self._write_manifest(
             run_dir=run_dir,
             summary=final_summary,
@@ -338,6 +369,22 @@ def _rows_for_scenario(*, rows: pd.DataFrame, scenario: str) -> pd.DataFrame:
     if scenario == "weighted_combined":
         return rows.reset_index(drop=True)
     raise ValueError(f"unsupported training scenario: {scenario}")
+
+
+def _scenario_skip_reason(*, train_rows: pd.DataFrame, valid_rows: pd.DataFrame, scenario: str) -> str | None:
+    scenario_train = _rows_for_scenario(rows=train_rows, scenario=scenario)
+    scenario_valid = _rows_for_scenario(rows=valid_rows, scenario=scenario)
+    if scenario_train.empty:
+        return "train has no rows"
+    if scenario_valid.empty:
+        return "valid has no rows"
+    train_labels = {int(value) for value in scenario_train["y"].unique()}
+    if train_labels != {0, 1}:
+        return f"train must contain both classes, observed={sorted(train_labels)}"
+    valid_labels = {int(value) for value in scenario_valid["y"].unique()}
+    if valid_labels != {0, 1}:
+        return f"valid must contain both classes, observed={sorted(valid_labels)}"
+    return None
 
 
 def _ensure_binary_labels(*, rows: pd.DataFrame, context: str) -> None:

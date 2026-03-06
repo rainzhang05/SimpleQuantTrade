@@ -106,6 +106,63 @@ class EvaluationServiceTests(unittest.TestCase):
             self.assertEqual(run_record["primary_scenario"], first.primary_scenario)
             self.assertTrue((run_dir / "metrics.json").exists())
 
+    def test_evaluator_handles_runs_with_partial_scenarios(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cfg = make_runtime_config(root)
+            store = StateStore(cfg.state_db)
+            run_id = "run-partial"
+            run_dir = cfg.runtime_dir / "research" / "training" / run_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            write_json_atomic(run_dir / "manifest.json", {"run_id": run_id, "status": "trained"})
+
+            weighted_predictions = pd.DataFrame(
+                {
+                    "run_id": [run_id, run_id],
+                    "snapshot_id": ["snap123", "snap123"],
+                    "fold_index": [1, 1],
+                    "scenario": ["weighted_combined", "weighted_combined"],
+                    "model_scope": ["global", "global"],
+                    "model_symbol": [None, None],
+                    "symbol": ["BTCCAD", "BTCCAD"],
+                    "timestamp_ms": [1, 2],
+                    "source": ["synthetic", "synthetic"],
+                    "y": [1, 0],
+                    "forward_return": [0.03, -0.01],
+                    "supervised_row_weight": [0.6, 0.6],
+                    "probability": [0.8, 0.2],
+                }
+            )
+            write_parquet_atomic(run_dir / "predictions" / "fold_01" / "weighted_combined.parquet", weighted_predictions)
+
+            store.upsert_training_run(
+                run_id=run_id,
+                snapshot_id="snap123",
+                dataset_hash="datahash",
+                feature_spec_hash="featurehash",
+                seed=42,
+                timeframe="15m",
+                train_window_months=12,
+                valid_window_months=1,
+                train_step_months=1,
+                folds_requested=1,
+                folds_built=1,
+                status="trained",
+                artifact_dir=str(run_dir),
+                scenario_status={
+                    "weighted_combined": {"status": "trained"},
+                    "ndax_only": {"status": "skipped", "folds_skipped": 1},
+                },
+                metrics_summary={},
+            )
+
+            summary = EvaluationService(config=cfg, state_store=store).evaluate(run_id=run_id)
+
+            self.assertEqual(summary.status, "evaluated")
+            self.assertEqual(summary.primary_scenario, "weighted_combined")
+            self.assertIn("weighted_combined", summary.metrics_summary)
+            self.assertNotIn("ndax_only", summary.metrics_summary)
+
 
 if __name__ == "__main__":
     unittest.main()

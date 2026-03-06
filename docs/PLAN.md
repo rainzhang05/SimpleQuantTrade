@@ -187,6 +187,10 @@ Active universe note:
 - cost-aware evaluator with two persisted scenarios:
   - `ndax_only`
   - `weighted_combined`
+- scenario execution contract:
+  - `weighted_combined` is mandatory for every built fold
+  - `ndax_only` is a benchmark and may complete only on the subset of folds with sufficient NDAX supervision
+  - skipped benchmark folds are persisted in `training_runs.scenario_status`
 - CLI contract implemented for:
   - `qtbot train --snapshot <SNAPSHOT_ID> --folds <N> --universe V1`
   - `qtbot eval --run <RUN_ID>`

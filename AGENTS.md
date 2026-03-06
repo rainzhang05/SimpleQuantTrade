@@ -121,6 +121,11 @@ Universe rule:
 - keep the active `V1` universe aligned with the roadmap and current confidence contract
 - `BCH`, `RUNE`, and `TIA` are currently excluded from the active universe until their supervision quality contract is explicitly revised
 
+Phase 6 training rule:
+- `weighted_combined` is the required training scenario for every built fold
+- `ndax_only` is a benchmark scenario and may be partial/skipped when requested folds do not have enough NDAX-only train/validate supervision
+- skipped NDAX benchmark folds must be recorded deterministically in run metadata, not hidden
+
 ## 8) When to Ask the User
 
 Ask for clarification when:

@@ -150,6 +150,11 @@ Training artifacts:
 - `runtime/research/training/<RUN_ID>/models/global/<scenario>/fold_<NN>.txt`
 - `runtime/research/training/<RUN_ID>/models/per_coin/<SYMBOL>/<scenario>/fold_<NN>.txt`
 
+Scenario behavior:
+- `weighted_combined` is the required Phase 6 training scenario and must train for every built fold.
+- `ndax_only` is a benchmark scenario; folds with insufficient NDAX train/validate rows or missing classes are skipped and recorded in `manifest.json` / `training_runs.scenario_status`.
+- `eval` reports metrics for whichever scenarios produced persisted prediction files.
+
 ## Next Steps to Final Production ML (Current -> Final)
 
 Current program status:

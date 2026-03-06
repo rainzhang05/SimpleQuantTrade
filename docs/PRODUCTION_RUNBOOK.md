@@ -128,7 +128,8 @@ Universe note:
 Training readiness checks:
 - `runtime/research/training/<RUN_ID>/manifest.json` exists
 - `training_runs`, `training_folds`, and `fold_metrics` contain the run
-- `metrics.json` reports both `ndax_only` and `weighted_combined`
+- `weighted_combined` metrics are present
+- `ndax_only` metrics are present only when the requested folds have sufficient NDAX history; skipped folds/scenarios are recorded in `training_runs.scenario_status`
 - repeated `eval --run <RUN_ID>` rewrites identical metrics without duplicate DB rows
 - synthetic supervision may appear as `direct`, `carry_backward`, or `carry_forward`; symbols with no anchor remain continuity-only
 

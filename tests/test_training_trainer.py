@@ -87,14 +87,15 @@ def _month_sequence(start_year: int, start_month: int, count: int) -> list[tuple
     return items
 
 
-def _build_training_fixture(root: Path, snapshot_id: str) -> None:
+def _build_training_fixture(root: Path, snapshot_id: str, *, ndax_snapshot_start_month_index: int = 0, month_count: int = 14) -> None:
     snapshot_rows: list[dict[str, object]] = []
     market_rows_ndax: list[dict[str, object]] = []
     market_rows_binance: list[dict[str, object]] = []
     fx_rows: list[dict[str, object]] = []
-    months = _month_sequence(2025, 1, 14)
+    months = _month_sequence(2025, 1, month_count)
     previous_ts: int | None = None
     previous_close: float | None = None
+    previous_month_index: int | None = None
     for month_index, (year, month) in enumerate(months):
         last_day = monthrange(year, month)[1]
         month_rows: list[tuple[int, float]] = []
@@ -123,12 +124,24 @@ def _build_training_fixture(root: Path, snapshot_id: str) -> None:
                         "volume": 10.0 + row_idx,
                         "inside_bid": 0.0,
                         "inside_ask": 0.0,
-                        "source": "ndax",
+                        "source": (
+                            "ndax"
+                            if (previous_month_index or 0) >= ndax_snapshot_start_month_index
+                            else "synthetic"
+                        ),
                         "effective_month": datetime.fromtimestamp(previous_ts / 1000, tz=timezone.utc).strftime("%Y-%m"),
                         "quality_pass": True,
-                        "weight_method_version": "ndax_native_v1",
-                        "effective_monthly_weight": 1.0,
-                        "supervised_row_weight": 1.0,
+                        "weight_method_version": (
+                            "ndax_native_v1"
+                            if (previous_month_index or 0) >= ndax_snapshot_start_month_index
+                            else "combined_v2"
+                        ),
+                        "effective_monthly_weight": (
+                            1.0 if (previous_month_index or 0) >= ndax_snapshot_start_month_index else 0.6
+                        ),
+                        "supervised_row_weight": (
+                            1.0 if (previous_month_index or 0) >= ndax_snapshot_start_month_index else 0.6
+                        ),
                         "label_available": True,
                         "row_status": "trainable",
                         "next_close": close,
@@ -141,6 +154,7 @@ def _build_training_fixture(root: Path, snapshot_id: str) -> None:
             fx_rows.append({"timestamp_ms": ts, "open": 2.0, "high": 2.0, "low": 2.0, "close": 2.0, "volume": 1.0, "symbol": "USDTCAD", "source": "ndax"})
             previous_ts = ts
             previous_close = close
+            previous_month_index = month_index
 
     snapshot_rows.append(
         {
@@ -223,6 +237,45 @@ class TrainingServiceTests(unittest.TestCase):
             self.assertEqual(len(fold_records), 1)
             self.assertEqual(fold_records[0]["status"], "trained")
             self.assertEqual(fold_records[0]["per_coin_skip_reasons"], {})
+
+    def test_training_service_skips_ndax_only_folds_without_ndax_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cfg = make_runtime_config(
+                root,
+                train_window_months=3,
+                valid_window_months=1,
+                train_step_months=1,
+            )
+            store = StateStore(cfg.state_db)
+            snapshot_id = "partial-ndax-snapshot"
+            _build_training_fixture(
+                root,
+                snapshot_id,
+                ndax_snapshot_start_month_index=3,
+                month_count=6,
+            )
+            service = TrainingService(config=cfg, state_store=store)
+
+            summary = service.train(snapshot_id=snapshot_id, folds=3, universe="V1")
+
+            self.assertEqual(summary.status, "trained")
+            self.assertEqual(summary.folds_built, 2)
+            run_record = store.get_training_run(run_id=summary.run_id)
+            assert run_record is not None
+            ndax_status = run_record["scenario_status"]["ndax_only"]
+            self.assertEqual(ndax_status["status"], "partial")
+            self.assertEqual(ndax_status["folds_completed"], 1)
+            self.assertEqual(ndax_status["folds_skipped"], 1)
+            self.assertEqual(
+                ndax_status["skip_reasons"],
+                [{"fold_index": 1, "reason": "train has no rows"}],
+            )
+            weighted_status = run_record["scenario_status"]["weighted_combined"]
+            self.assertEqual(weighted_status["status"], "trained")
+            self.assertTrue((Path(summary.artifact_dir) / "predictions" / "fold_01" / "weighted_combined.parquet").exists())
+            self.assertFalse((Path(summary.artifact_dir) / "predictions" / "fold_01" / "ndax_only.parquet").exists())
+            self.assertTrue((Path(summary.artifact_dir) / "predictions" / "fold_02" / "ndax_only.parquet").exists())
 
 
 if __name__ == "__main__":
