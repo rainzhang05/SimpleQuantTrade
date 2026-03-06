@@ -104,6 +104,36 @@ PYTHONPATH=src python3 -m qtbot data-weight-status --timeframe 15m
 Calibration report output:
 - `runtime/research/bridge_weighting/<RUN_ID>/metrics.json`
 
+## Next Steps to Final Production ML (Current -> Final)
+
+Current program status:
+- Implemented now: dual-source ingestion, combined CAD build, and monthly calibration weighting.
+- Next active build phase: training integration and model pipeline (see `docs/PLAN.md` phases 5-9).
+
+Execution sequence:
+1. Keep data current:
+   - rerun `data-backfill`, `data-build-combined`, and `data-calibrate-weights` for latest window.
+2. Implement snapshot + weighted training dataset integration (Phase 5).
+3. Implement walk-forward training/evaluation (Phase 6).
+4. Implement promotion gates and model bundle publishing (Phase 7).
+5. Implement live ML inference path with observe-only fallback (Phase 8).
+6. Complete staging/cutover evidence and rollback drill, then enable ML live path (Phase 9).
+
+Planned CLI commands for the remaining phases (not fully implemented yet):
+- `qtbot build-snapshot --asof <ISO_TIME>`
+- `qtbot train --snapshot <SNAPSHOT_ID> --folds <N> --universe V1`
+- `qtbot eval --run <RUN_ID>`
+- `qtbot promote --run <RUN_ID>`
+- `qtbot model-status`
+- `qtbot predict --symbol <SYM> --at latest`
+- `qtbot set-active-bundle <BUNDLE_ID>`
+
+Do not enable ML live trading until all phase gates pass:
+- deterministic snapshot reproducibility
+- deterministic fold metrics and promotion decisions
+- bundle integrity verification
+- staging and cutover checklist pass
+
 ## Storage Contract
 
 - `data/raw/ndax/15m/*.parquet`

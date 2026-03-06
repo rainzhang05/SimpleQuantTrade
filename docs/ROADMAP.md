@@ -345,7 +345,34 @@ H. Live inference integration
 I. Staging/cutover ML readiness
 - evidence-driven launch and rollback safety
 
-## 15) Done Definition
+## 15) Current Program Status and Next-Step Gates
+
+Current status:
+- Milestones A-D are implemented (data ingestion, combined build, calibration weighting).
+- Milestones E-I remain the official implementation runway to production ML.
+- The immediate next milestone is **E (Training integration)**.
+
+Mandatory gate sequence from current state to production:
+1. **E: Training integration**
+   - Entry: combined coverage contract pass + monthly weights available.
+   - Exit: reproducible training snapshot with source mix + row weights.
+2. **F: Cost-aware evaluator**
+   - Entry: snapshot builder and weighted dataset path complete.
+   - Exit: deterministic walk-forward metrics with sensitivity runs.
+3. **G: Promotion + bundle publisher**
+   - Entry: evaluator outputs complete and gate inputs persisted.
+   - Exit: deterministic promote accept/reject + atomic `LATEST` update + signature verification.
+4. **H: Live inference integration**
+   - Entry: at least one promoted bundle and passing model integrity checks.
+   - Exit: bar-close deterministic predictions with observe-only safety fallback.
+5. **I: Staging/cutover readiness**
+   - Entry: live inference path stable in observe-only.
+   - Exit: staging + cutover reports pass with rollback drill evidence.
+
+Production activation rule:
+- Live ML order placement is allowed only after all milestone gates above pass in order and evidence is recorded in runtime logs/state.
+
+## 16) Done Definition
 
 System upgrade is complete when all are true:
 1. Dual-source 15m backfill is resumable and idempotent.

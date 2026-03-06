@@ -7,7 +7,7 @@ Primary authority:
 
 ## 0) Phase Status Board
 
-- Phase 0 (docs/contract freeze): `in_progress`
+- Phase 0 (docs/contract freeze): `implemented`
 - Phase 1 (NDAX hardening): `implemented`
 - Phase 2 (Binance raw pipeline): `implemented`
 - Phase 3 (combined builder): `implemented`
@@ -21,6 +21,37 @@ Primary authority:
 Notes:
 - “implemented” means command + persistence + tests exist in repository.
 - “pending” means contract is fixed and implementation remains.
+
+## 0.1) Current Checkpoint and Immediate Next Phase
+
+Current official checkpoint:
+- Data stack phases 1-4 are complete and operational.
+- Next official implementation phase is **Phase 5 (Training Dataset Integration)**.
+- Model-training, promotion, and ML runtime cutover remain pending (phases 5-9).
+
+Phase 5 entry gate (must be true before coding starts):
+1. `data-status --dataset combined` shows coverage contract pass for the intended training window.
+2. `data-weight-status --timeframe 15m` shows recent monthly weights for train symbols.
+3. `data-build-combined` and `data-calibrate-weights` are reproducible over repeated runs.
+
+Phase 5 implementation objective:
+- Make `combined` the default supervised training dataset with deterministic per-row weighting.
+
+## 0.2) Step-by-Step Runway: Now -> Final Production ML
+
+1. Complete Phase 5 (weighted training dataset integration).
+2. Complete Phase 6 (walk-forward trainer + evaluator + metrics persistence).
+3. Complete Phase 7 (promotion gates + bundle artifact writer + atomic active pointer).
+4. Complete Phase 8 (live runtime inference on bar close with deterministic blend + observe-only fallback).
+5. Complete Phase 9 (staging/cutover finalization, runbook evidence bundle, rollback drill).
+6. Enable ML live order path only after all phase gates pass and operator checklist evidence is archived.
+
+Required evidence package for final production readiness:
+1. Snapshot reproducibility logs and dataset hashes.
+2. Fold-level training/evaluation metrics for minimum fold/trade gates.
+3. Promotion decision record with gate pass/fail details.
+4. Active bundle integrity verification output.
+5. Staging + cutover checklist reports from the same code/config revision.
 
 ## 1) Phase 0: Docs and Contract Freeze
 
@@ -125,6 +156,7 @@ This is the official phase where model-training input changes from NDAX-only to 
   - NDAX rows weight `1.0`
   - synthetic rows weight `w_final`
 - quality-failed synthetic rows excluded from supervised labels (continuity-only).
+- sealed snapshot includes source mix and effective monthly weights used for each row.
 
 ### Deterministic constraints
 - snapshot hash depends on row order, source tags, and effective monthly weights.
@@ -132,9 +164,11 @@ This is the official phase where model-training input changes from NDAX-only to 
 ### Tests
 - weighting path correctness
 - synthetic exclusion path when `quality_pass=false`
+- snapshot hash stability with fixed inputs
 
 ### Acceptance gate
 - training input snapshot is reproducible and includes source-mix audit fields.
+- `build-snapshot` writes a manifest with deterministic hash and row-count parity checks.
 
 ## 7) Phase 6: Walk-Forward Training + Evaluation (Official Model Training Phase)
 
@@ -146,6 +180,9 @@ This is the official phase where model fitting and evaluation become production-
 - cost-aware evaluator with sensitivity runs:
   - synthetic disabled baseline
   - calibrated synthetic weights enabled
+- CLI contract implemented for:
+  - `qtbot train --snapshot <SNAPSHOT_ID> --folds <N> --universe V1`
+  - `qtbot eval --run <RUN_ID>`
 
 ### Module boundaries
 - training/eval package (new)
@@ -155,9 +192,11 @@ This is the official phase where model fitting and evaluation become production-
 - fold reproducibility
 - deterministic model artifacts from fixed seed/snapshot
 - evaluator cost correctness
+- fold-boundary determinism under repeated runs
 
 ### Acceptance gate
 - end-to-end run creates deterministic fold metrics and source-mix diagnostics.
+- run metadata and fold metrics are persisted to `training_runs`, `training_folds`, and `fold_metrics`.
 
 ## 8) Phase 7: Promotion Gates + Bundle Publishing
 
@@ -165,6 +204,10 @@ This is the official phase where model fitting and evaluation become production-
 - promotion gate engine with hard/soft checks.
 - bundle writer with `signature.sha256` and atomic `LATEST` update.
 - rollback-safe active-bundle switching.
+- CLI contract implemented for:
+  - `qtbot promote --run <RUN_ID>`
+  - `qtbot model-status`
+  - `qtbot set-active-bundle <BUNDLE_ID>`
 
 ### Hard gate minimums
 - `min_folds=12`
@@ -179,9 +222,11 @@ This is the official phase where model fitting and evaluation become production-
 - gate pass/fail matrix
 - atomic pointer update
 - rollback integrity checks
+- signature validation failure path
 
 ### Acceptance gate
 - promotion deterministically accepts/rejects same run.
+- bundle contents match roadmap contract (`manifest.json`, models, feature/threshold/cost files, signature).
 
 ## 9) Phase 8: Live ML Inference Integration
 
@@ -190,14 +235,18 @@ This is the official phase where model fitting and evaluation become production-
 - deterministic blend (`0.7*coin + 0.3*global` when eligible).
 - existing lifecycle/risk/reconciliation shell preserved.
 - observe-only fallback if bundle/data readiness fails.
+- CLI contract implemented for:
+  - `qtbot predict --symbol <SYM> --at latest`
 
 ### Tests
 - bar-close trigger behavior
 - deterministic decision outputs
 - observe-only safety behavior
+- preflight bundle/data readiness blocking tests
 
 ### Acceptance gate
 - runtime decisions are deterministic and safe under failure modes.
+- with live disabled, decisions output includes prediction values, blend path, and gate reasons.
 
 ## 10) Phase 9: Staging/Cutover Finalization and Rollout
 
@@ -205,6 +254,11 @@ This is the official phase where model fitting and evaluation become production-
 - staging adds combined-build and calibration smoke checks.
 - cutover requires fresh calibration evidence and combined coverage pass.
 - runbook finalized with rollback/incident playbooks.
+- end-to-end operator procedure documented for:
+  - data refresh
+  - snapshot/train/eval/promote
+  - active bundle verification
+  - live cutover and rollback
 
 ### Rollback and safe-mode gate (first-class)
 - active bundle switch only when paused.
@@ -213,6 +267,7 @@ This is the official phase where model fitting and evaluation become production-
 
 ### Acceptance gate
 - staging + cutover pass in CI and operator workflow.
+- operator can execute the full offline-to-live ML path from docs alone without undocumented steps.
 
 ## 11) Migration Path: Legacy Runtime -> ML Runtime
 

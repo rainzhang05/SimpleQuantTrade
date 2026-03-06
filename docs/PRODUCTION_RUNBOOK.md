@@ -5,6 +5,10 @@ This runbook covers production-safe operation for the NDAX execution runtime wit
 Canonical design source:
 - `docs/ROADMAP.md`
 
+Current rollout state:
+- Data foundation (dual-source + combined + calibration) is active.
+- Full ML bundle runtime path is phased and must follow `docs/PLAN.md` phases 5-9 in order.
+
 ## 1) Pre-Launch Readiness
 
 Required before launch:
@@ -37,6 +41,22 @@ Expected outcomes:
 - `combined` coverage meets configured contract.
 - at least one recent calibration report exists.
 - cutover reports `passed=true`.
+
+## 2.1) Required Runway Before ML Live Activation
+
+This sequence is mandatory before enabling ML live order path:
+1. Complete Phase 5: weighted training snapshot integration.
+2. Complete Phase 6: walk-forward training and evaluator with deterministic metrics.
+3. Complete Phase 7: promotion gates and signed bundle publication.
+4. Complete Phase 8: runtime inference in observe-only mode with deterministic outputs.
+5. Complete Phase 9: staging/cutover reports and rollback drill evidence.
+
+Evidence required to move between steps:
+1. reproducible snapshot hash for fixed as-of time.
+2. persisted fold metrics and sensitivity outputs.
+3. promotion decision record + active bundle integrity pass.
+4. observe-only runtime logs with prediction + gating reasons.
+5. passing staging and cutover checklists from the same code/config revision.
 
 ## 3) Data Pipeline Operations
 
@@ -100,6 +120,15 @@ PYTHONPATH=src python3 -m qtbot pause
 PYTHONPATH=src python3 -m qtbot set-active-bundle <BUNDLE_ID>
 PYTHONPATH=src python3 -m qtbot model-status
 PYTHONPATH=src python3 -m qtbot resume
+```
+
+Training/promotion command flow once phases 5-7 are implemented:
+```bash
+PYTHONPATH=src python3 -m qtbot build-snapshot --asof <ISO_TIME>
+PYTHONPATH=src python3 -m qtbot train --snapshot <SNAPSHOT_ID> --folds 12 --universe V1
+PYTHONPATH=src python3 -m qtbot eval --run <RUN_ID>
+PYTHONPATH=src python3 -m qtbot promote --run <RUN_ID>
+PYTHONPATH=src python3 -m qtbot model-status
 ```
 
 ## Rollback Procedure
