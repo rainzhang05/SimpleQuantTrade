@@ -177,6 +177,10 @@ This is the official phase where model-training input changes from NDAX-only to 
 
 This is the official phase where model fitting and evaluation become production-grade.
 
+Active universe note:
+- `V1` currently contains `27` symbols.
+- `BCH`, `RUNE`, and `TIA` are excluded from the active set because they do not meet the current supervision-confidence bar.
+
 ### Deliverables
 - walk-forward folds (default 12m train / 1m validate / 1m step)
 - LightGBM global + per-coin training

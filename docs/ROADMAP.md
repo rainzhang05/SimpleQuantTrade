@@ -88,8 +88,8 @@ Active pointer contract:
 
 ## 3) Universe V1 Policy
 
-Universe V1 (fixed 30 tickers):
-- `BTC, ETH, XRP, SOL, ADA, DOGE, AVAX, LINK, DOT, BCH, LTC, XLM, TON, UNI, NEAR, ATOM, HBAR, AAVE, ALGO, APT, ARB, FET, FIL, ICP, INJ, OP, SUI, TIA, RUNE, SEI`
+Universe V1 (fixed 27 tickers):
+- `BTC, ETH, XRP, SOL, ADA, DOGE, AVAX, LINK, DOT, LTC, XLM, TON, UNI, NEAR, ATOM, HBAR, AAVE, ALGO, APT, ARB, FET, FIL, ICP, INJ, OP, SUI, SEI`
 
 Eligibility rules:
 - Runtime trading only on symbols with active NDAX CAD spot pairs.

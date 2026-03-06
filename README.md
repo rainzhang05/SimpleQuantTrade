@@ -12,6 +12,7 @@ Authoritative docs:
 
 - Execution venue: NDAX only (spot, CAD budget safety, reconciliation-first startup).
 - Data: dual-source 15m pipeline (`NDAX + Binance`) with deterministic combined CAD dataset.
+- Active training/runtime universe: `27` symbols in `V1`; `BCH`, `RUNE`, and `TIA` are excluded from the active set.
 - Safety shell retained: control plane, preflight, risk halts, append-only logs, docker/staging/cutover.
 - Training/runtime ML path: phased per roadmap and plan.
 

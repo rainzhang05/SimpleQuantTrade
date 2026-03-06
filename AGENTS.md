@@ -117,6 +117,10 @@ Repository distribution rule:
 - do not commit raw parquet files, combined parquet files, or snapshot artifacts
 - every cloned device is expected to regenerate its own `data/` tree via the documented data pipeline commands
 
+Universe rule:
+- keep the active `V1` universe aligned with the roadmap and current confidence contract
+- `BCH`, `RUNE`, and `TIA` are currently excluded from the active universe until their supervision quality contract is explicitly revised
+
 ## 8) When to Ask the User
 
 Ask for clarification when:

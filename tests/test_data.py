@@ -72,11 +72,11 @@ class _FakeNdaxClientWithGap(_FakeNdaxClient):
         self._rows_by_instrument[2] = [row for idx, row in enumerate(rows) if idx != 10]
 
 
-class _FakeNdaxClientWithEmptyBch(_FakeNdaxClient):
+class _FakeNdaxClientWithEmptyUni(_FakeNdaxClient):
     def __init__(self) -> None:
         super().__init__()
         self._instruments.append(
-            {"Product1Symbol": "BCH", "Product2Symbol": "CAD", "Symbol": "BCHCAD", "InstrumentId": 4}
+            {"Product1Symbol": "UNI", "Product2Symbol": "CAD", "Symbol": "UNICAD", "InstrumentId": 4}
         )
         self._rows_by_instrument[4] = []
 
@@ -131,11 +131,11 @@ class _FakeBinanceClientWithGap(_FakeBinanceClient):
         self._rows_by_symbol["BTCUSDT"] = [row for idx, row in enumerate(rows) if idx not in {10, 11, 12}]
 
 
-class _FakeBinanceClientWithBch(_FakeBinanceClient):
+class _FakeBinanceClientWithUni(_FakeBinanceClient):
     def __init__(self) -> None:
         super().__init__()
-        self._symbols.add("BCHUSDT")
-        self._rows_by_symbol["BCHUSDT"] = self._generate_rows(
+        self._symbols.add("UNIUSDT")
+        self._rows_by_symbol["UNIUSDT"] = self._generate_rows(
             start_ts_ms=_ts_ms(2026, 1, 1, 0, 0),
             periods=96 * 3,
             seed=35.0,
@@ -181,7 +181,7 @@ class _FakeNdaxClientCarryForward:
     def __init__(self) -> None:
         self._instruments = [
             {"Product1Symbol": "BTC", "Product2Symbol": "CAD", "Symbol": "BTCCAD", "InstrumentId": 1},
-            {"Product1Symbol": "BCH", "Product2Symbol": "CAD", "Symbol": "BCHCAD", "InstrumentId": 2},
+            {"Product1Symbol": "UNI", "Product2Symbol": "CAD", "Symbol": "UNICAD", "InstrumentId": 2},
             {"Product1Symbol": "USDT", "Product2Symbol": "CAD", "Symbol": "USDTCAD", "InstrumentId": 3},
         ]
         december = _segment_timestamps(year=2025, month=12, day_count=3)
@@ -220,13 +220,13 @@ class _FakeBinanceClientCarryForward:
         december = _segment_timestamps(year=2025, month=12, day_count=3)
         january = _segment_timestamps(year=2026, month=1, day_count=3)
         february = _segment_timestamps(year=2026, month=2, day_count=3)
-        self._symbols = {"BTCUSDT", "BCHUSDT"}
+        self._symbols = {"BTCUSDT", "UNIUSDT"}
         self._rows_by_symbol = {
             "BTCUSDT": _generate_binance_from_close_map(
                 timestamps=december + january + february,
                 close_fn=lambda idx: 50.0 + (idx * 0.05),
             ),
-            "BCHUSDT": _generate_binance_from_close_map(
+            "UNIUSDT": _generate_binance_from_close_map(
                 timestamps=december + january + february,
                 close_fn=lambda idx: 25.0 + (idx * 0.03),
             ),
@@ -389,8 +389,8 @@ class DataServiceTests(unittest.TestCase):
             store = StateStore(cfg.state_db)
             service = MarketDataService(
                 config=cfg,
-                ndax_client=_FakeNdaxClientWithEmptyBch(),
-                binance_client=_FakeBinanceClientWithBch(),
+                ndax_client=_FakeNdaxClientWithEmptyUni(),
+                binance_client=_FakeBinanceClientWithUni(),
                 state_store=store,
             )
 
@@ -406,12 +406,12 @@ class DataServiceTests(unittest.TestCase):
                 timeframe="15m",
             )
 
-            bch = next(item for item in combined.symbols if item.symbol == "BCHCAD")
-            self.assertEqual(bch.combined_rows, 96 * 3)
-            self.assertEqual(bch.gap_count, 0)
+            uni = next(item for item in combined.symbols if item.symbol == "UNICAD")
+            self.assertEqual(uni.combined_rows, 96 * 3)
+            self.assertEqual(uni.gap_count, 0)
 
-            bch_file = Path(td) / "data" / "combined" / "15m" / "BCHCAD.parquet"
-            rows = pq.read_table(bch_file).to_pylist()
+            uni_file = Path(td) / "data" / "combined" / "15m" / "UNICAD.parquet"
+            rows = pq.read_table(uni_file).to_pylist()
             self.assertTrue(rows)
             self.assertTrue(all(row["source"] == "synthetic" for row in rows))
 
@@ -497,7 +497,7 @@ class DataServiceTests(unittest.TestCase):
             btc_dec = weights[("BTCCAD", "2025-12")]
             btc_jan = weights[("BTCCAD", "2026-01")]
             btc_feb = weights[("BTCCAD", "2026-02")]
-            bch_dec = weights[("BCHCAD", "2025-12")]
+            uni_dec = weights[("UNICAD", "2025-12")]
 
             self.assertEqual(int(btc_dec["supervised_eligible"]), 1)
             self.assertEqual(btc_dec["eligibility_mode"], "carry_backward")
@@ -511,9 +511,9 @@ class DataServiceTests(unittest.TestCase):
             self.assertEqual(btc_feb["eligibility_mode"], "carry_forward")
             self.assertEqual(btc_feb["anchor_month"], "2026-01")
 
-            self.assertEqual(int(bch_dec["supervised_eligible"]), 0)
-            self.assertEqual(bch_dec["eligibility_mode"], "blocked")
-            self.assertIsNone(bch_dec["anchor_month"])
+            self.assertEqual(int(uni_dec["supervised_eligible"]), 0)
+            self.assertEqual(uni_dec["eligibility_mode"], "blocked")
+            self.assertIsNone(uni_dec["anchor_month"])
 
 
 if __name__ == "__main__":

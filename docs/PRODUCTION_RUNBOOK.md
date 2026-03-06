@@ -121,6 +121,10 @@ PYTHONPATH=src python3 -m qtbot train --snapshot <SNAPSHOT_ID> --folds 12 --univ
 PYTHONPATH=src python3 -m qtbot eval --run <RUN_ID>
 ```
 
+Universe note:
+- active `V1` training runs use the `27` confident symbols only
+- `BCH`, `RUNE`, and `TIA` are excluded from the active universe
+
 Training readiness checks:
 - `runtime/research/training/<RUN_ID>/manifest.json` exists
 - `training_runs`, `training_folds`, and `fold_metrics` contain the run

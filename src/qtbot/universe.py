@@ -15,7 +15,6 @@ UNIVERSE_V1_COINS: tuple[str, ...] = (
     "AVAX",
     "LINK",
     "DOT",
-    "BCH",
     "LTC",
     "XLM",
     "TON",
@@ -33,8 +32,6 @@ UNIVERSE_V1_COINS: tuple[str, ...] = (
     "INJ",
     "OP",
     "SUI",
-    "TIA",
-    "RUNE",
     "SEI",
 )
 
