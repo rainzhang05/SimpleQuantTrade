@@ -1,173 +1,154 @@
 # SimpleQuantTrade
 
-SimpleQuantTrade is a production-oriented NDAX CLI trading bot being upgraded to an ML-driven 15m architecture.
+SimpleQuantTrade is a production-oriented NDAX trading runtime being upgraded to a laptop-grade ML 15m system.
 
-Active design authority:
-- `docs/ROADMAP.md` (canonical specification)
-- `docs/PLAN.md` (implementation sequencing)
-- `docs/PRODUCTION_RUNBOOK.md` (operations)
+Authoritative docs:
+- Roadmap: `docs/ROADMAP.md`
+- Execution plan: `docs/PLAN.md`
+- Production runbook: `docs/PRODUCTION_RUNBOOK.md`
+- Legacy archive: `docs/LEGACY_FIXED_RULE_ARCHIVE.md`
 
-Legacy fixed-rule 1m EMA/ATR design:
-- `docs/LEGACY_FIXED_RULE_ARCHIVE.md` (archive only)
+## Current Active Direction
 
-## Architecture Summary
+- Execution venue: NDAX only (spot, CAD budget safety, reconciliation-first startup).
+- Data: dual-source 15m pipeline (`NDAX + Binance`) with deterministic combined CAD dataset.
+- Safety shell retained: control plane, preflight, risk halts, append-only logs, docker/staging/cutover.
+- Training/runtime ML path: phased per roadmap and plan.
 
-Target v2 architecture:
-- NDAX execution venue, spot-only, CAD budget safety model.
-- 15m candle data pipeline with Parquet storage.
-- Deterministic feature pipeline (50 to 80 features).
-- LightGBM global + per-coin models.
-- Walk-forward training/evaluation and promotion gates.
-- Live inference with deterministic blend combiner.
-- Existing operational shell retained:
-- control plane (`start/pause/resume/stop/status`)
-- reconciliation-first startup
-- go-live preflight
-- risk halts and append-only logs
-- Docker + staging/cutover checks
+## CLI Surface
 
-## Safety Model
+### Lifecycle and operations
+- `qtbot start --budget <CAD>`
+- `qtbot pause`
+- `qtbot resume`
+- `qtbot stop`
+- `qtbot status`
+- `qtbot ndax-pairs`
+- `qtbot ndax-candles --symbol <NDAX_SYMBOL> --from-date YYYY-MM-DD --to-date YYYY-MM-DD`
+- `qtbot ndax-balances`
+- `qtbot ndax-check`
+- `qtbot staging-validate`
+- `qtbot cutover-checklist`
 
-Non-negotiable safeguards:
-- NDAX only, spot-only, no leverage/margin/borrowing.
-- Exchange balances are source of truth.
-- Market orders only.
-- Daily loss cap, slippage guard, consecutive-error kill-switch.
-- Live trading path remains explicitly gated.
-- Bundle integrity failures trigger observe-only mode.
+### Data pipeline
+- `qtbot data-backfill --from YYYY-MM-DD --to YYYY-MM-DD --timeframe 15m --sources ndax,binance`
+- `qtbot data-status --timeframe 15m --dataset ndax|binance|combined|all`
+- `qtbot data-build-combined --from YYYY-MM-DD --to YYYY-MM-DD --timeframe 15m`
+- `qtbot data-calibrate-weights --from YYYY-MM-DD --to YYYY-MM-DD --timeframe 15m --refresh monthly`
+- `qtbot data-weight-status --timeframe 15m`
+
+Defaults:
+- `data-backfill` defaults to `--sources ndax,binance`
+- `data-status` defaults to `--dataset combined`
 
 ## Quickstart
 
-### 1) Environment
-- Copy `.env.example` to `.env`.
-- Fill required NDAX credentials:
-- `NDAX_API_KEY`
-- `NDAX_API_SECRET`
-- `NDAX_USER_ID`
-- Optional: `NDAX_USERNAME`
-
-### 2) Local install
+### 1) Install
 ```bash
 python3 -m pip install -e .
 ```
 
-### 3) Core control-plane commands
+### 2) Configure environment
 ```bash
-qtbot start --budget 1000
-qtbot status
-qtbot pause
-qtbot resume
-qtbot stop
+cp .env.example .env
 ```
 
-### 4) Existing NDAX/operator commands
+Required NDAX private credentials for private commands:
+- `NDAX_API_KEY`
+- `NDAX_API_SECRET`
+- `NDAX_USER_ID`
+
+### 3) Validate runtime shell
 ```bash
-qtbot ndax-pairs
-qtbot ndax-candles --symbol SOLCAD --from-date 2026-03-01 --to-date 2026-03-05
-qtbot ndax-balances
-qtbot ndax-check
-qtbot staging-validate --offline-only
-qtbot cutover-checklist --offline-only
+PYTHONPATH=src python3 -m qtbot status
+PYTHONPATH=src python3 -m qtbot staging-validate --offline-only --budget 1000 --cadence-seconds 1 --min-loops 1 --timeout-seconds 30
+PYTHONPATH=src python3 -m qtbot cutover-checklist --offline-only --budget 250 --staging-max-age-hours 168
 ```
 
-## ML Workflow (Roadmap v2 Target)
+## End-to-End Data Workflow (Implemented)
 
-End-to-end v2 workflow:
+### Step 1: Backfill raw NDAX + Binance 15m data
 ```bash
-qtbot data-backfill --from 2021-01-01 --to 2026-03-01 --timeframe 15m
-qtbot data-status
-qtbot build-snapshot --asof 2026-03-01T00:00Z
-qtbot train --snapshot <SNAPSHOT_ID> --folds 12 --universe V1
-qtbot eval --run <RUN_ID>
-qtbot promote --run <RUN_ID>
-qtbot model-status
-qtbot predict --symbol SOLCAD --at latest
-qtbot start --budget 1000
+PYTHONPATH=src python3 -m qtbot data-backfill --from 2021-01-01 --to $(date -u +%F) --timeframe 15m --sources ndax,binance
 ```
 
-Rollback workflow:
+Resume behavior:
+- Safe to stop anytime.
+- Rerun the same command to continue from missing windows.
+- No duplicate rows are written (idempotent merge).
+
+Backfill progress log:
+- `runtime/logs/data_backfill.log`
+
+### Step 2: Inspect coverage
 ```bash
-qtbot pause
-qtbot set-active-bundle <BUNDLE_ID>
-qtbot resume
+PYTHONPATH=src python3 -m qtbot data-status --timeframe 15m --dataset all
 ```
 
-Note:
-- The roadmap command surface above is the upgrade target and is delivered by phased milestones in `docs/PLAN.md`.
+Coverage reports are written to:
+- `runtime/logs/data_coverage_ndax.json`
+- `runtime/logs/data_coverage_binance.json`
+- `runtime/logs/data_coverage_combined.json`
 
-## Universe and Defaults (v2)
-
-Universe V1 (fixed 30 tickers):
-- `BTC, ETH, XRP, SOL, ADA, DOGE, AVAX, LINK, DOT, BCH, LTC, XLM, TON, UNI, NEAR, ATOM, HBAR, AAVE, ALGO, APT, ARB, FET, FIL, ICP, INJ, OP, SUI, TIA, RUNE, SEI`
-
-Eligibility rules:
-- Trade only tickers that have NDAX CAD pair at runtime.
-- Missing CAD pairs are skipped and logged.
-
-Policy defaults:
-- `QTBOT_TIMEFRAME=15m`
-- `QTBOT_UNIVERSE=V1`
-- `QTBOT_BTC_ETH_LOCK=true`
-- `QTBOT_FEE_PCT_PER_SIDE=0.002`
-- `QTBOT_ENTRY_THRESHOLD=0.60`
-- `QTBOT_EXIT_THRESHOLD=0.48`
-
-## Storage Layout (v2)
-
-```text
-data/raw/ndax/15m/<SYMBOL>.parquet
-data/snapshots/<SNAPSHOT_ID>/
-models/bundles/<BUNDLE_ID>/
-models/bundles/LATEST
-runtime/state.sqlite
-runtime/control.json
-runtime/logs/
+### Step 3: Build combined CAD dataset
+```bash
+PYTHONPATH=src python3 -m qtbot data-build-combined --from 2021-01-01 --to $(date -u +%F) --timeframe 15m
 ```
+
+### Step 4: Calibrate monthly synthetic weights
+```bash
+PYTHONPATH=src python3 -m qtbot data-calibrate-weights --from 2021-01-01 --to $(date -u +%F) --timeframe 15m --refresh monthly
+PYTHONPATH=src python3 -m qtbot data-weight-status --timeframe 15m
+```
+
+Calibration report output:
+- `runtime/research/bridge_weighting/<RUN_ID>/metrics.json`
+
+## Storage Contract
+
+- `data/raw/ndax/15m/*.parquet`
+- `data/raw/binance/15m/*USDT.parquet`
+- `data/combined/15m/*.parquet`
+- `runtime/state.sqlite`
+- `runtime/control.json`
+- `runtime/logs/*`
+
+## Key Config (Dual-Source)
+
+- `QTBOT_DATA_SOURCES=ndax,binance`
+- `QTBOT_DATASET_MODE=combined`
+- `QTBOT_BINANCE_BASE_URL=https://api.binance.com`
+- `QTBOT_BINANCE_QUOTE=USDT`
+- `QTBOT_BRIDGE_FX_SYMBOL=USDTCAD`
+- `QTBOT_SYNTH_WEIGHT_MIN=0.20`
+- `QTBOT_SYNTH_WEIGHT_MAX=0.80`
+- `QTBOT_SYNTH_WEIGHT_DEFAULT=0.60`
+- `QTBOT_SYNTH_WEIGHT_REFRESH=monthly`
+- `QTBOT_MIN_OVERLAP_ROWS_FOR_WEIGHT=1000`
+- `QTBOT_CONVERSION_MAX_MEDIAN_APE=0.015`
+- `QTBOT_COMBINED_MAX_GAP_COUNT=0`
+- `QTBOT_COMBINED_MIN_COVERAGE=0.999`
 
 ## Docker Usage
 
-Build and start:
 ```bash
 docker build -t simplequanttrade:latest .
 docker compose up -d qtbot
-```
 
-Control from another terminal:
-```bash
 docker compose exec qtbot qtbot status
-docker compose exec qtbot qtbot pause
-docker compose exec qtbot qtbot resume
-docker compose exec qtbot qtbot stop
+docker compose exec qtbot qtbot data-status --timeframe 15m --dataset combined
+docker compose exec qtbot qtbot data-weight-status --timeframe 15m
 ```
 
-Run roadmap command surface in container:
-```bash
-docker compose exec qtbot qtbot model-status
-docker compose exec qtbot qtbot data-status
-```
+## Testing
 
-## Testing and CI
-
-Run tests locally:
 ```bash
 PYTHONPATH=src python3 -m unittest discover -s tests -p "test_*.py"
 ```
 
-Coverage:
-```bash
-PYTHONPATH=src coverage run --source=src/qtbot -m unittest discover -s tests -p "test_*.py"
-coverage report --show-missing
-```
+## Safety Notes
 
-CI expectations:
-- compile + tests + coverage gate
-- offline staging and cutover command checks
-- docker image and compose validation
-
-## Operator Notes
-
-Before live launch:
-- run staging validation
-- run cutover checklist
-- verify model bundle integrity and active pointer
-- review runbook: `docs/PRODUCTION_RUNBOOK.md`
+- NDAX is execution truth; trading remains NDAX-only.
+- Dual-source data improves training continuity; it does not change execution venue.
+- Do not bypass preflight/risk gates.
+- If readiness checks fail, run observe-only until resolved.

@@ -1,7 +1,7 @@
 {
   "checks": [
     {
-      "detail": "staging report fresh age_hours=0.84 required_steps=5",
+      "detail": "staging report fresh age_hours=0.00 required_steps=3",
       "name": "staging_validation_report",
       "passed": true
     },
@@ -21,7 +21,7 @@
       "passed": true
     }
   ],
-  "completed_at_utc": "2026-03-05T11:14:51+00:00",
+  "completed_at_utc": "2026-03-06T01:24:04+00:00",
   "launch_commands": [
     "PYTHONPATH=src python3 -m qtbot start --budget 250",
     "docker compose up -d qtbot --scale qtbot=1 (set QTBOT_START_BUDGET_CAD=250 in environment)"
@@ -42,5 +42,5 @@
   ],
   "runtime_dir": "/Users/rainzhang/QuantTrade/runtime_prod/production_cutover",
   "start_budget_cad": 250.0,
-  "started_at_utc": "2026-03-05T11:14:51+00:00"
+  "started_at_utc": "2026-03-06T01:24:04+00:00"
 }

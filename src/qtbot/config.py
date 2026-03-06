@@ -48,6 +48,19 @@ class RuntimeConfig:
     discord_webhook_url: str | None
     discord_timeout_seconds: float
     discord_max_retries: int
+    data_sources: tuple[str, ...]
+    dataset_mode: str
+    binance_base_url: str
+    binance_quote: str
+    bridge_fx_symbol: str
+    synth_weight_min: float
+    synth_weight_max: float
+    synth_weight_refresh: str
+    synth_weight_default: float
+    min_overlap_rows_for_weight: int
+    conversion_max_median_ape: float
+    combined_max_gap_count: int
+    combined_min_coverage: float
 
 
 def load_runtime_config() -> RuntimeConfig:
@@ -139,6 +152,66 @@ def load_runtime_config() -> RuntimeConfig:
     if discord_max_retries < 0:
         raise ValueError("QTBOT_DISCORD_MAX_RETRIES must be >= 0.")
 
+    data_sources_raw = os.getenv("QTBOT_DATA_SOURCES", "ndax,binance")
+    data_sources = tuple(
+        item.strip().lower() for item in data_sources_raw.split(",") if item.strip()
+    )
+    valid_data_sources = {"ndax", "binance"}
+    if not data_sources:
+        raise ValueError("QTBOT_DATA_SOURCES must include at least one source.")
+    if any(item not in valid_data_sources for item in data_sources):
+        raise ValueError(
+            "QTBOT_DATA_SOURCES supports only ndax and binance."
+        )
+
+    dataset_mode = os.getenv("QTBOT_DATASET_MODE", "combined").strip().lower()
+    if dataset_mode not in {"ndax", "binance", "combined"}:
+        raise ValueError("QTBOT_DATASET_MODE must be one of: ndax, binance, combined.")
+
+    binance_base_url = os.getenv("QTBOT_BINANCE_BASE_URL", "https://api.binance.com").strip().rstrip("/")
+    if not binance_base_url:
+        raise ValueError("QTBOT_BINANCE_BASE_URL cannot be empty.")
+
+    binance_quote = os.getenv("QTBOT_BINANCE_QUOTE", "USDT").strip().upper()
+    if not binance_quote:
+        raise ValueError("QTBOT_BINANCE_QUOTE cannot be empty.")
+
+    bridge_fx_symbol = os.getenv("QTBOT_BRIDGE_FX_SYMBOL", "USDTCAD").strip().upper()
+    if not bridge_fx_symbol:
+        raise ValueError("QTBOT_BRIDGE_FX_SYMBOL cannot be empty.")
+
+    synth_weight_min = float(os.getenv("QTBOT_SYNTH_WEIGHT_MIN", "0.20"))
+    synth_weight_max = float(os.getenv("QTBOT_SYNTH_WEIGHT_MAX", "0.80"))
+    synth_weight_default = float(os.getenv("QTBOT_SYNTH_WEIGHT_DEFAULT", "0.60"))
+    if not (0.0 <= synth_weight_min <= 1.0):
+        raise ValueError("QTBOT_SYNTH_WEIGHT_MIN must be in [0,1].")
+    if not (0.0 <= synth_weight_max <= 1.0):
+        raise ValueError("QTBOT_SYNTH_WEIGHT_MAX must be in [0,1].")
+    if synth_weight_min > synth_weight_max:
+        raise ValueError("QTBOT_SYNTH_WEIGHT_MIN must be <= QTBOT_SYNTH_WEIGHT_MAX.")
+    if not (synth_weight_min <= synth_weight_default <= synth_weight_max):
+        raise ValueError("QTBOT_SYNTH_WEIGHT_DEFAULT must be within min/max range.")
+
+    synth_weight_refresh = os.getenv("QTBOT_SYNTH_WEIGHT_REFRESH", "monthly").strip().lower()
+    if synth_weight_refresh not in {"monthly"}:
+        raise ValueError("QTBOT_SYNTH_WEIGHT_REFRESH currently supports: monthly.")
+
+    min_overlap_rows_for_weight = int(os.getenv("QTBOT_MIN_OVERLAP_ROWS_FOR_WEIGHT", "1000"))
+    if min_overlap_rows_for_weight <= 0:
+        raise ValueError("QTBOT_MIN_OVERLAP_ROWS_FOR_WEIGHT must be > 0.")
+
+    conversion_max_median_ape = float(os.getenv("QTBOT_CONVERSION_MAX_MEDIAN_APE", "0.015"))
+    if not (0 < conversion_max_median_ape < 1):
+        raise ValueError("QTBOT_CONVERSION_MAX_MEDIAN_APE must be in (0,1).")
+
+    combined_max_gap_count = int(os.getenv("QTBOT_COMBINED_MAX_GAP_COUNT", "0"))
+    if combined_max_gap_count < 0:
+        raise ValueError("QTBOT_COMBINED_MAX_GAP_COUNT must be >= 0.")
+
+    combined_min_coverage = float(os.getenv("QTBOT_COMBINED_MIN_COVERAGE", "0.999"))
+    if not (0 < combined_min_coverage <= 1):
+        raise ValueError("QTBOT_COMBINED_MIN_COVERAGE must be in (0,1].")
+
     runtime_dir = _resolve_runtime_dir(os.getenv("QTBOT_RUNTIME_DIR", "runtime"))
     return RuntimeConfig(
         cadence_seconds=cadence_seconds,
@@ -171,6 +244,19 @@ def load_runtime_config() -> RuntimeConfig:
         discord_webhook_url=discord_webhook_url,
         discord_timeout_seconds=discord_timeout_seconds,
         discord_max_retries=discord_max_retries,
+        data_sources=data_sources,
+        dataset_mode=dataset_mode,
+        binance_base_url=binance_base_url,
+        binance_quote=binance_quote,
+        bridge_fx_symbol=bridge_fx_symbol,
+        synth_weight_min=synth_weight_min,
+        synth_weight_max=synth_weight_max,
+        synth_weight_refresh=synth_weight_refresh,
+        synth_weight_default=synth_weight_default,
+        min_overlap_rows_for_weight=min_overlap_rows_for_weight,
+        conversion_max_median_ape=conversion_max_median_ape,
+        combined_max_gap_count=combined_max_gap_count,
+        combined_min_coverage=combined_min_coverage,
     )
 
 

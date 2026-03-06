@@ -43,6 +43,19 @@ class RuntimeConfigTests(unittest.TestCase):
                         "QTBOT_DISCORD_WEBHOOK_URL=https://discord.example/webhook",
                         "QTBOT_DISCORD_TIMEOUT_SECONDS=9",
                         "QTBOT_DISCORD_MAX_RETRIES=5",
+                        "QTBOT_DATA_SOURCES=ndax,binance",
+                        "QTBOT_DATASET_MODE=combined",
+                        "QTBOT_BINANCE_BASE_URL=https://api.binance.com",
+                        "QTBOT_BINANCE_QUOTE=USDT",
+                        "QTBOT_BRIDGE_FX_SYMBOL=USDTCAD",
+                        "QTBOT_SYNTH_WEIGHT_MIN=0.25",
+                        "QTBOT_SYNTH_WEIGHT_MAX=0.75",
+                        "QTBOT_SYNTH_WEIGHT_DEFAULT=0.55",
+                        "QTBOT_SYNTH_WEIGHT_REFRESH=monthly",
+                        "QTBOT_MIN_OVERLAP_ROWS_FOR_WEIGHT=1200",
+                        "QTBOT_CONVERSION_MAX_MEDIAN_APE=0.02",
+                        "QTBOT_COMBINED_MAX_GAP_COUNT=1",
+                        "QTBOT_COMBINED_MIN_COVERAGE=0.98",
                     ]
                 ),
                 encoding="utf-8",
@@ -64,6 +77,19 @@ class RuntimeConfigTests(unittest.TestCase):
             self.assertEqual(cfg.discord_webhook_url, "https://discord.example/webhook")
             self.assertEqual(cfg.discord_timeout_seconds, 9.0)
             self.assertEqual(cfg.discord_max_retries, 5)
+            self.assertEqual(cfg.data_sources, ("ndax", "binance"))
+            self.assertEqual(cfg.dataset_mode, "combined")
+            self.assertEqual(cfg.binance_base_url, "https://api.binance.com")
+            self.assertEqual(cfg.binance_quote, "USDT")
+            self.assertEqual(cfg.bridge_fx_symbol, "USDTCAD")
+            self.assertEqual(cfg.synth_weight_min, 0.25)
+            self.assertEqual(cfg.synth_weight_max, 0.75)
+            self.assertEqual(cfg.synth_weight_default, 0.55)
+            self.assertEqual(cfg.synth_weight_refresh, "monthly")
+            self.assertEqual(cfg.min_overlap_rows_for_weight, 1200)
+            self.assertEqual(cfg.conversion_max_median_ape, 0.02)
+            self.assertEqual(cfg.combined_max_gap_count, 1)
+            self.assertEqual(cfg.combined_min_coverage, 0.98)
             self.assertEqual(cfg.runtime_dir, (root / "test_runtime").resolve())
 
     def test_invalid_bool_raises_value_error(self) -> None:
@@ -106,6 +132,23 @@ class RuntimeConfigTests(unittest.TestCase):
             root = Path(td)
             (root / ".env").write_text(
                 "QTBOT_DISCORD_TIMEOUT_SECONDS=0\nQTBOT_DISCORD_MAX_RETRIES=-1\n",
+                encoding="utf-8",
+            )
+            with pushd(root), mock.patch.dict(os.environ, {}, clear=True):
+                with self.assertRaises(ValueError):
+                    load_runtime_config()
+
+    def test_invalid_dual_source_values_raise(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / ".env").write_text(
+                "\n".join(
+                    [
+                        "QTBOT_DATA_SOURCES=ndax,foo",
+                        "QTBOT_DATASET_MODE=invalid",
+                    ]
+                )
+                + "\n",
                 encoding="utf-8",
             )
             with pushd(root), mock.patch.dict(os.environ, {}, clear=True):

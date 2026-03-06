@@ -182,6 +182,7 @@ class CliHandlerTests(unittest.TestCase):
                     from_date="2026-01-01",
                     to_date="2026-01-31",
                     timeframe="15m",
+                    sources="ndax,binance",
                 )
             self.assertEqual(code, 0)
             self.assertEqual(err, "")
@@ -205,12 +206,87 @@ class CliHandlerTests(unittest.TestCase):
                     cli._handle_data_status,
                     config=cfg,
                     timeframe="15m",
+                    dataset="combined",
                 )
             self.assertEqual(code, 0)
             self.assertEqual(err, "")
             payload = json.loads(out)
             self.assertEqual(payload["symbols_total"], 5)
-            service.data_status.assert_called_once_with(timeframe="15m")
+            service.data_status.assert_called_once_with(timeframe="15m", dataset="combined")
+
+    def test_handle_data_build_combined(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = make_runtime_config(Path(td))
+            summary = mock.Mock()
+            summary.symbols_with_errors = 0
+            summary.to_payload.return_value = {
+                "timeframe": "15m",
+                "symbols_total": 2,
+                "symbols_with_errors": 0,
+            }
+            service = mock.Mock()
+            service.build_combined.return_value = summary
+            with mock.patch("qtbot.cli._make_data_service", return_value=service):
+                code, out, err = _capture_output(
+                    cli._handle_data_build_combined,
+                    config=cfg,
+                    from_date="2026-01-01",
+                    to_date="2026-01-31",
+                    timeframe="15m",
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(err, "")
+            payload = json.loads(out)
+            self.assertEqual(payload["symbols_total"], 2)
+            service.build_combined.assert_called_once()
+
+    def test_handle_data_calibrate_weights(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = make_runtime_config(Path(td))
+            summary = mock.Mock()
+            summary.to_payload.return_value = {
+                "timeframe": "15m",
+                "rows_total": 10,
+                "refresh": "monthly",
+            }
+            service = mock.Mock()
+            service.calibrate_weights.return_value = summary
+            with mock.patch("qtbot.cli._make_data_service", return_value=service):
+                code, out, err = _capture_output(
+                    cli._handle_data_calibrate_weights,
+                    config=cfg,
+                    from_date="2026-01-01",
+                    to_date="2026-01-31",
+                    timeframe="15m",
+                    refresh="monthly",
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(err, "")
+            payload = json.loads(out)
+            self.assertEqual(payload["rows_total"], 10)
+            service.calibrate_weights.assert_called_once()
+
+    def test_handle_data_weight_status(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = make_runtime_config(Path(td))
+            summary = mock.Mock()
+            summary.to_payload.return_value = {
+                "timeframe": "15m",
+                "row_count": 3,
+            }
+            service = mock.Mock()
+            service.weight_status.return_value = summary
+            with mock.patch("qtbot.cli._make_data_service", return_value=service):
+                code, out, err = _capture_output(
+                    cli._handle_data_weight_status,
+                    config=cfg,
+                    timeframe="15m",
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(err, "")
+            payload = json.loads(out)
+            self.assertEqual(payload["row_count"], 3)
+            service.weight_status.assert_called_once_with(timeframe="15m")
 
     def test_handle_start_and_main_dispatch(self) -> None:
         with tempfile.TemporaryDirectory() as td:

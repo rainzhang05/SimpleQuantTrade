@@ -1,111 +1,83 @@
-# Legacy Archive: Fixed-Rule 1m EMA/ATR System
+# Legacy Archive: Fixed-Rule 1m EMA/ATR Runtime
 
-Archive status:
-- Retired as active target architecture.
-- Preserved for migration history and operational context.
-- Archived on March 5, 2026.
+Status:
+- Historical archive only.
+- Not the active implementation target.
+- Active architecture is defined in `docs/ROADMAP.md`.
 
-Active architecture is defined in `docs/ROADMAP.md`.
+Archive purpose:
+- preserve migration context from 1m fixed-rule runtime to ML-oriented 15m dual-source pipeline.
 
-## 1) Legacy System Summary
+## 1) What the Legacy System Was
 
-The retired system was a fixed-rule, long-only NDAX spot bot with:
-- 60-second loop cadence
-- 1-minute signal candles
-- EMA/ATR-based deterministic entry and exit rules
+The retired system used:
+- NDAX-only live candle polling
+- 1-minute EMA/ATR deterministic rules
 - market-order execution
-- persistent runtime state in SQLite
-- control plane and safety shell
+- lifecycle control plane and safety shell
+- runtime SQLite state + append-only logs
 
-## 2) Legacy Core Rules
+## 2) Legacy Signal Rules (Historical)
 
-### Indicators
-- `EMA_fast = 60`
-- `EMA_slow = 360`
-- `ATR = 60`
+Indicators:
+- `EMA_fast=60`
+- `EMA_slow=360`
+- `ATR=60`
 
-### Entry logic
-Enter long when all conditions were true:
-- symbol in configured universe and CAD pair available
+Entry (long):
+- trend up (`EMA_fast > EMA_slow`)
+- pullback (`close <= EMA_fast`)
 - no open position
-- `EMA_fast > EMA_slow`
-- `close <= EMA_fast`
 - cooldown satisfied
 
-### Exit logic
-Exit when any condition was true:
-- trend break (`EMA_fast < EMA_slow`)
-- ATR stop (`close < entry_price - 2.5 * ATR`)
-- time stop (default 48 hours)
+Exit:
+- trend break
+- ATR stop (`entry - 2.5*ATR`)
+- max hold timeout
 
-### Candidate selection
-- scored by `(EMA_fast - EMA_slow) / close`
-- capped by `MAX_NEW_ENTRIES_PER_CYCLE=3` per loop for operational burst control
+## 3) What Was Kept
 
-## 3) Legacy Universe and Timeframe
+The following production shell remains in active architecture:
+- lifecycle commands (`start/pause/resume/stop/status`)
+- reconciliation-first startup
+- preflight safety gate
+- daily loss/slippage/error risk halts
+- append-only operational logging
+- docker/staging/cutover workflow
 
-- Universe was hardcoded top-20 list.
-- Runtime traded only symbols with NDAX CAD spot pair.
-- No BTC/ETH-specific lock policy in active logic.
+## 4) What Changed
 
-## 4) Legacy Fee and Risk Defaults
+- Signal source changed: fixed rules -> ML prediction path (phased activation).
+- Timeframe changed: 1m -> 15m.
+- Data strategy changed: NDAX-only raw -> NDAX+Binance combined training dataset.
+- Added deterministic overlap-error calibration and synthetic row weighting.
+- Added combined dataset coverage contracts and calibration reports.
 
-Legacy defaults:
-- `QTBOT_TAKER_FEE_RATE=0.002` (0.2% per side)
-- daily loss cap enabled
-- slippage guard enabled
-- consecutive-error kill-switch enabled
+## 5) Migration Context
 
-## 5) Legacy Operational Shell (Retained in v2)
+Migration sequence:
+1. preserve runtime safety shell
+2. implement dual-source data retrieval
+3. build combined CAD dataset
+4. calibrate monthly synthetic weights
+5. integrate weighted training/eval/promotion
+6. activate ML runtime path with rollback safeguards
 
-The following shell components originated in legacy architecture and remain part of v2:
-- lifecycle control plane (`start/pause/resume/stop/status`)
-- startup reconciliation with NDAX as source of truth
-- go-live preflight gate
-- append-only runtime logs
-- Docker packaging and staging/cutover drills
+## 6) Legacy Command Context
 
-## 6) Why It Was Retired
-
-Retirement drivers:
-- fixed-rule strategy ceiling on adaptability across symbols and regimes
-- requirement for reproducible model promotion workflow
-- requirement for richer cost-aware evaluation and fold stability controls
-
-The v2 design replaces fixed-rule signal logic with ML prediction while preserving the operational safety shell.
-
-## 7) Migration Mapping (Legacy -> v2)
-
-- Signal engine:
-- legacy: EMA/ATR fixed rules
-- v2: LightGBM global + per-coin blend
-
-- Timeframe:
-- legacy: 1m candles
-- v2: 15m candles
-
-- Data pipeline:
-- legacy: live-only loop fetch
-- v2: persistent 15m Parquet + sealed snapshots
-
-- Evaluation:
-- legacy: live-only behavior
-- v2: offline walk-forward + promotion gates
-
-- Deployment artifact:
-- legacy: strategy code only
-- v2: signed model bundle + atomic active pointer
-
-## 8) Command History Context
-
-Legacy command set included:
+Legacy command set (still retained):
 - `start`, `pause`, `resume`, `stop`, `status`
 - `ndax-pairs`, `ndax-candles`, `ndax-balances`, `ndax-check`
 - `staging-validate`, `cutover-checklist`
 
-In v2, these remain, and ML/data/training/model commands are added per roadmap.
+New active data commands are documented in:
+- `README.md`
+- `docs/ROADMAP.md`
 
-## 9) Usage Policy
+## 7) Usage Policy
 
-Do not treat this document as active design or implementation guidance.
-Use `docs/ROADMAP.md` for all current and future development decisions.
+Do not use this file for new implementation decisions.
+Use:
+- `docs/ROADMAP.md` for architecture/contracts
+- `docs/PLAN.md` for phase execution
+- `docs/PRODUCTION_RUNBOOK.md` for operations

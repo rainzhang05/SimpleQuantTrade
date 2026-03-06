@@ -48,6 +48,13 @@ jobs:
         run: |
           python -m qtbot cutover-checklist --offline-only --budget 250 --staging-max-age-hours 168
 
+      - name: Run dual-source data command checks
+        run: |
+          python -m qtbot data-status --timeframe 15m --dataset all
+          python -m qtbot data-build-combined --from 2026-01-01 --to 2026-01-03 --timeframe 15m
+          python -m qtbot data-calibrate-weights --from 2026-01-01 --to 2026-01-03 --timeframe 15m --refresh monthly
+          python -m qtbot data-weight-status --timeframe 15m
+
       - name: Upload coverage xml
         uses: actions/upload-artifact@v4
         with:

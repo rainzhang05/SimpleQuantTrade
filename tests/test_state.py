@@ -251,6 +251,88 @@ class StateStoreTests(unittest.TestCase):
             day2 = datetime(2026, 3, 6, 0, 0, tzinfo=timezone.utc)
             self.assertEqual(store.get_daily_realized_pnl(now_utc=day2), 0.0)
 
+    def test_dual_source_data_tables_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "state.sqlite"
+            store = StateStore(db_path)
+            store.initialize(initial_budget_cad=1000.0)
+
+            store.upsert_data_sync_checkpoint(
+                source="ndax",
+                symbol="BTCCAD",
+                timeframe="15m",
+                requested_from="2026-01-01",
+                requested_to="2026-01-31",
+                last_success_ts=1735689600000,
+                status="ok",
+            )
+            checkpoints = store.get_data_sync_checkpoints(source="ndax", timeframe="15m")
+            self.assertEqual(len(checkpoints), 1)
+            self.assertEqual(checkpoints[0]["symbol"], "BTCCAD")
+
+            store.upsert_data_coverage_v2(
+                dataset="combined",
+                symbol="BTCCAD",
+                timeframe="15m",
+                first_ts=1735689600000,
+                last_ts=1735776000000,
+                row_count=96,
+                gap_count=0,
+                duplicate_count=0,
+                misaligned_count=0,
+                coverage_pct=1.0,
+                ndax_share=0.7,
+                synth_share=0.3,
+            )
+            coverage_rows = store.get_data_coverage_v2(dataset="combined", timeframe="15m")
+            self.assertEqual(len(coverage_rows), 1)
+            self.assertEqual(coverage_rows[0]["symbol"], "BTCCAD")
+
+            store.insert_conversion_quality(
+                symbol="BTCCAD",
+                timeframe="15m",
+                period_start="2026-01-01",
+                period_end="2026-01-31",
+                overlap_rows=1200,
+                median_ape_close=0.01,
+                median_abs_ret_err=0.002,
+                ret_corr=0.91,
+                direction_match=0.73,
+                basis_median=1.0,
+                basis_mad=0.01,
+                quality_pass=True,
+            )
+            quality_rows = store.get_conversion_quality(symbol="BTCCAD", timeframe="15m")
+            self.assertEqual(len(quality_rows), 1)
+            self.assertEqual(int(quality_rows[0]["quality_pass"]), 1)
+
+            store.upsert_synthetic_weight(
+                symbol="BTCCAD",
+                timeframe="15m",
+                effective_month="2026-01",
+                weight_quality=0.62,
+                weight_backtest=0.58,
+                weight_final=0.60,
+                overlap_rows=1200,
+                quality_pass=True,
+                method_version="v1",
+            )
+            weights = store.get_synthetic_weights(timeframe="15m")
+            self.assertEqual(len(weights), 1)
+            self.assertEqual(weights[0]["effective_month"], "2026-01")
+
+            store.insert_combined_build(
+                symbol="BTCCAD",
+                timeframe="15m",
+                from_ts=1735689600000,
+                to_ts=1735775100000,
+                ndax_rows=95,
+                binance_rows=96,
+                combined_rows=96,
+                gap_count=0,
+                build_hash="abc123",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,186 +1,173 @@
-# Production Runbook: SimpleQuantTrade ML 15m
+# Production Runbook: ML 15m Dual-Source Operations
 
-This runbook defines launch and incident procedures for the ML-driven 15m architecture.
+This runbook covers production-safe operation for the NDAX execution runtime with NDAX+Binance training data pipeline.
 
-Canonical behavior source:
+Canonical design source:
 - `docs/ROADMAP.md`
 
-## 1) Preconditions
+## 1) Pre-Launch Readiness
 
-Required before production launch:
-- Recent successful `qtbot staging-validate` report.
-- Successful `qtbot cutover-checklist` in target environment.
-- NDAX credentials configured and validated.
-- Runtime directories writable:
-- `runtime/`
-- `runtime/logs/`
-- `models/bundles/`
-- Active bundle exists and passes integrity validation.
-- Operator access to logs and runtime status.
+Required before launch:
+1. Fresh staging validation report.
+2. Passing cutover checklist.
+3. Data coverage confirmed (especially `combined`).
+4. Latest calibration report exists and weights are populated.
+5. NDAX credentials and runtime paths are valid.
 
-Mandatory monitored artifacts:
+Key artifacts:
+- `runtime/state.sqlite`
+- `runtime/control.json`
 - `runtime/logs/qtbot.log`
 - `runtime/logs/decisions.csv`
 - `runtime/logs/trades.csv`
-- `runtime/state.sqlite`
+- `runtime/logs/data_coverage_*.json`
+- `runtime/research/bridge_weighting/<RUN_ID>/metrics.json`
 
-## 2) Pre-Launch ML Readiness Checklist
+## 2) ML/Data Readiness Commands
 
-Run these checks before enabling live order path:
-1. Verify data coverage for 15m timeframe is current and gap thresholds pass.
-2. Verify active bundle pointer and manifest metadata.
-3. Verify bundle signature/hash integrity.
-4. Verify feature spec compatibility with runtime code.
-5. Verify warmup sufficiency for configured universe.
-6. Confirm BTC/ETH lock policy setting.
-7. Confirm risk controls and thresholds are configured.
-
-Recommended commands:
+Run in order:
 ```bash
-qtbot data-status
-qtbot model-status
-qtbot cutover-checklist --budget 250 --staging-max-age-hours 48
+PYTHONPATH=src python3 -m qtbot data-status --timeframe 15m --dataset all
+PYTHONPATH=src python3 -m qtbot data-weight-status --timeframe 15m
+PYTHONPATH=src python3 -m qtbot staging-validate --offline-only --budget 1000 --cadence-seconds 1 --min-loops 1 --timeout-seconds 30
+PYTHONPATH=src python3 -m qtbot cutover-checklist --offline-only --budget 250 --staging-max-age-hours 168
 ```
 
-## 3) Launch Procedure
+Expected outcomes:
+- `combined` coverage meets configured contract.
+- at least one recent calibration report exists.
+- cutover reports `passed=true`.
 
-### 3.1 Initial controlled launch
-Start with constrained budget:
+## 3) Data Pipeline Operations
+
+### 3.1 Full historical backfill
 ```bash
-qtbot start --budget 250
+PYTHONPATH=src python3 -m qtbot data-backfill --from 2021-01-01 --to $(date -u +%F) --timeframe 15m --sources ndax,binance
 ```
 
-Check health:
+Stop/resume behavior:
+- Safe to interrupt.
+- Rerun same command to continue missing windows.
+- No duplicate rows on rerun.
+
+Backfill logs:
+- `runtime/logs/data_backfill.log`
+
+### 3.2 Combined dataset build
 ```bash
-qtbot status
+PYTHONPATH=src python3 -m qtbot data-build-combined --from 2021-01-01 --to $(date -u +%F) --timeframe 15m
 ```
 
-### 3.2 Observe-only validation window
-If system starts in observe-only mode (for any readiness or integrity reason):
-- Do not force live trading.
-- Resolve failing preflight conditions.
-- Re-run staging and cutover checks.
-
-### 3.3 Containerized launch
+### 3.3 Monthly calibration
 ```bash
-docker compose up -d qtbot
-docker compose exec qtbot qtbot status
+PYTHONPATH=src python3 -m qtbot data-calibrate-weights --from 2021-01-01 --to $(date -u +%F) --timeframe 15m --refresh monthly
+PYTHONPATH=src python3 -m qtbot data-weight-status --timeframe 15m
 ```
 
-## 4) First-Cycle Validation
+## 4) Launch Procedure
 
-Within first cycles after launch, verify:
-- Decisions log contains prediction context and gating reasons.
-- No orders are placed outside bar-close decision points.
-- If live enabled and valid signals exist, fills append to `trades.csv`.
-- State totals are coherent:
-- `bot_cash_cad`
-- `realized_pnl_cad`
-- `fees_paid_cad`
-- Alerts fire for lifecycle and risk events when triggered.
-
-## 5) Bundle Operations
-
-### 5.1 Promote new model bundle
+### 4.1 Controlled startup
 ```bash
-qtbot promote --run <RUN_ID>
-qtbot model-status
+PYTHONPATH=src python3 -m qtbot start --budget 250
+PYTHONPATH=src python3 -m qtbot status
 ```
 
-### 5.2 Rollback active bundle
-Rollback requires paused trading.
+### 4.2 First-cycle validation
+Verify in first cycles:
+1. decisions are logged with expected gates/reasons.
+2. no unexpected order placements.
+3. state accounting remains coherent (`bot_cash_cad`, `realized_pnl_cad`, `fees_paid_cad`).
+4. risk events trigger expected pause behavior.
 
+## 5) Observe-Only Safety Behavior
+
+If readiness/integrity checks fail:
+- runtime must not place orders.
+- control plane and logging stay active.
+- recover by fixing data/calibration/model issues, then rerun staging/cutover.
+
+## 6) Bundle Operations (When ML Runtime Phase Is Active)
+
+Promotion:
 ```bash
-qtbot pause
-qtbot set-active-bundle <BUNDLE_ID>
-qtbot model-status
-qtbot resume
+PYTHONPATH=src python3 -m qtbot promote --run <RUN_ID>
+PYTHONPATH=src python3 -m qtbot model-status
 ```
 
-Rollback rules:
-- Never delete old promoted bundles during rollback.
-- Pointer update must be atomic and logged.
+Manual active bundle switch:
+```bash
+PYTHONPATH=src python3 -m qtbot pause
+PYTHONPATH=src python3 -m qtbot set-active-bundle <BUNDLE_ID>
+PYTHONPATH=src python3 -m qtbot model-status
+PYTHONPATH=src python3 -m qtbot resume
+```
 
 ## Rollback Procedure
 
-Immediate containment:
+Rollback rules:
+- pause/stop before switching active bundle.
+- do not delete previous bundles.
+- pointer update must be atomic and logged.
+
+Emergency containment:
 ```bash
-qtbot stop
+PYTHONPATH=src python3 -m qtbot stop
+PYTHONPATH=src python3 -m qtbot status
 ```
 
 Containerized:
 ```bash
 docker compose exec qtbot qtbot stop
+docker compose exec qtbot qtbot status
 ```
 
-Confirm stopped:
-```bash
-qtbot status
-```
-
-Preserve artifacts for investigation:
+Preserve incident artifacts:
 - `runtime/state.sqlite`
-- `runtime/logs/qtbot.log`
-- `runtime/logs/decisions.csv`
-- `runtime/logs/trades.csv`
+- `runtime/logs/*`
+- latest coverage and calibration reports
 
 ## Incident Response
 
-### 7.1 Model bundle integrity failure
+### A) Model/bundle integrity failure
 Symptoms:
-- startup preflight fails bundle integrity checks
-- runtime enters observe-only mode
+- startup readiness fails
+- observe-only mode engaged
 
 Actions:
-1. pause/stop if not already contained
-2. inspect `model-status` and bundle manifest/signature
-3. switch to last known-good bundle via `set-active-bundle`
-4. re-run cutover checklist
-5. resume only after checks pass
+1. pause/stop trading.
+2. verify `model-status` and bundle manifest/signature.
+3. switch to last known-good bundle (if ML runtime is active).
+4. rerun staging/cutover.
 
-### 7.2 Data gap or warmup coverage failure
+### B) Data gap / coverage contract failure
 Symptoms:
-- preflight blocks live order path due to missing bars/warmup
+- combined coverage below threshold
+- gap or misalignment breaches
 
 Actions:
-1. run `data-status`
-2. backfill missing windows
-3. verify gap thresholds clear
-4. rerun preflight via cutover checklist
+1. run `data-status --dataset all`.
+2. rerun `data-backfill` for affected range.
+3. rerun `data-build-combined`.
+4. rerun `data-calibrate-weights`.
+5. verify coverage and weight status again.
 
-### 7.3 Risk halt triggered
-Symptoms:
-- trading auto-paused by daily loss cap, slippage guard, or error limit
-
+### C) Risk-trigger halt (loss/slippage/errors)
 Actions:
-1. keep bot paused
-2. inspect recent decisions/trades and risk events in logs
-3. classify trigger root cause (market move, execution quality, API instability, config issue)
-4. apply remediation
-5. run staging/cutover checks before resuming
+1. keep runtime paused.
+2. inspect recent decisions/trades and logs.
+3. identify root cause (market regime, execution quality, API instability, config issue).
+4. remediate and validate with staging/cutover before resuming.
 
-### 7.4 NDAX API instability
-Symptoms:
-- repeated connectivity/auth/order status errors
-
+### D) NDAX connectivity instability
 Actions:
-1. pause trading
-2. verify NDAX reachability and credential status
-3. check retry/error trend in `qtbot.log`
-4. resume only after stability is restored and reconciliation succeeds
+1. pause trading.
+2. validate credentials/connectivity with `ndax-check`.
+3. verify reconciliation and state health.
+4. resume only after stable connectivity is restored.
 
-## 8) Recovery and Resume Procedure
+## 9) Guardrails
 
-After incident remediation:
-1. ensure active bundle and data coverage are valid
-2. run staging validation
-3. run cutover checklist
-4. start with constrained budget
-5. monitor first cycles closely
-
-## 9) Operational Guardrails
-
-- Never bypass preflight failures for live trading.
-- Never switch active bundle while bot is running unpaused.
-- Keep all logs append-only and retain evidence for postmortems.
-- Treat reconciliation with NDAX as mandatory before order placement.
+- Never bypass preflight/risk checks for live execution.
+- Never switch active bundle while unpaused.
+- Keep operational logs append-only.
+- Treat reconciliation with NDAX as mandatory for safe startup.

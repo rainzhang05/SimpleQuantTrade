@@ -1,70 +1,64 @@
 # AGENTS.md
 
-This repository is developed and maintained by an AI coding agent.
-The agent is responsible for planning, implementation, reliability hardening, and documentation fidelity.
+This repository is maintained by an AI coding agent with production responsibility.
 
 ## 1) Primary Source of Truth
 
-Before any task, the agent must read:
+Before any task, read:
 - `docs/ROADMAP.md`
 
-`docs/ROADMAP.md` is the canonical specification and defines:
-- architecture
-- safety constraints
+`docs/ROADMAP.md` is authoritative for:
+- architecture and safety invariants
 - runtime behavior
-- CLI interfaces
-- data/training/inference contracts
-- rollout and operations expectations
+- CLI contracts
+- data/training/inference interfaces
+- rollout and operations requirements
 
-Legacy reference:
-- `docs/LEGACY_FIXED_RULE_ARCHIVE.md` is historical context only and is not the active target architecture.
+Legacy reference only:
+- `docs/LEGACY_FIXED_RULE_ARCHIVE.md`
 
-If user instructions conflict with the roadmap:
-1. ask for clarification, or
-2. update roadmap and companion docs when requirements are explicitly changed.
+If requirements change, update roadmap first (or in same change set), then update all companion docs.
 
-## 2) Scope of Responsibility
+## 2) Responsibility Scope
 
-The agent owns end-to-end lifecycle quality, including:
+The agent owns:
 - planning and architecture updates
 - implementation and refactoring
-- bug fixing and reliability improvements
+- bug fixes and reliability hardening
 - observability and operational safety
-- documentation and CI alignment
+- docs + CI alignment
 
-## 3) Repository Modification Permissions
+## 3) Modification Permissions
 
-The agent may modify any repository content when needed, including:
+The agent may modify any repository content when necessary:
 - source code
 - docs
 - config
 - dependencies
-- project structure
+- structure
 
-Constraints:
-- changes must remain consistent with `docs/ROADMAP.md`
-- CLI behavior and safety guarantees must remain coherent with roadmap contracts
+Constraint:
+- behavior and interfaces must remain coherent with `docs/ROADMAP.md`.
 
 ## 4) Engineering Principles
 
-### Reliability
-- preserve deterministic behavior
-- use robust error handling and retries for NDAX interactions
-
-### Simplicity
-- prefer clear deterministic logic over unnecessary abstractions
+### Correctness and determinism
+- prioritize deterministic behavior in data, calibration, training, and runtime decisions.
 
 ### Safety
-- never violate spot-only and CAD budget constraints
-- never bypass critical preflight or risk guards in live order path
+- never violate NDAX spot-only and CAD budget constraints.
+- never bypass preflight or risk guards in live order path.
 
-### Graceful operation
-- preserve start/pause/resume/stop behavior
-- ensure clean shutdown with persisted state and logs
+### Reliability
+- robust retries/error handling for exchange and data-source interactions.
+- safe persistent state handling with atomic writes where required.
 
-## 5) Documentation Synchronization Rules
+### Simplicity
+- prefer explicit, inspectable logic over complex abstractions.
 
-When architecture or interfaces change, the same change set must update documentation.
+## 5) Documentation Synchronization (Mandatory)
+
+When architecture/interfaces change, update docs in the same change set.
 
 Required docs:
 - `docs/ROADMAP.md`
@@ -73,66 +67,61 @@ Required docs:
 - `docs/PRODUCTION_RUNBOOK.md`
 - `AGENTS.md`
 
-Additional rule:
-- if changing or adding ML interfaces (commands, config vars, bundle schema, snapshot contracts, promotion gates, DB tables), update roadmap and all affected docs before concluding task.
+Additional requirement:
+- if changing ML/data interfaces, update all impacted docs before concluding:
+  - CLI commands
+  - env/config vars
+  - bundle schema
+  - snapshot contracts
+  - promotion gates
+  - DB schema
+  - coverage/calibration contracts
 
 ## 6) Code Quality Expectations
 
-The agent should maintain:
+Maintain:
 - clear module boundaries
 - readable code
 - structured logs
-- deterministic training and inference paths
-- safe persistent-state handling with atomic writes where required
 - tests for all new/changed behavior
-- CI updates so new tests run on push/pull request
+- CI coverage for new critical paths
 
-Avoid fragile or implicit behavior.
+Avoid fragile, implicit, or non-deterministic behavior.
 
 ## 7) State and Data Safety
 
-The system must:
-- preserve runtime-state integrity
-- avoid silent corruption
-- reconcile against NDAX state on restart
-- maintain deterministic snapshot and model-bundle contracts
+Protect these assets:
+- runtime DB: `runtime/state.sqlite`
+- control file: `runtime/control.json`
+- runtime logs: `runtime/logs/*`
+- snapshots: `data/snapshots/*`
+- raw/combined data: `data/raw/*`, `data/combined/*`
+- model bundles: `models/bundles/*`
 
-Critical files and stores:
-- runtime DB (`runtime/state.sqlite`)
-- control state (`runtime/control.json`)
-- logs (`runtime/logs/*`)
-- data snapshots (`data/snapshots/*`)
-- model bundles (`models/bundles/*`)
+Never silently corrupt or overwrite critical state.
 
 ## 8) When to Ask the User
 
-Ask for clarification if:
-- trading logic requirements are ambiguous
-- NDAX API behavior changes materially
-- a decision changes external behavior/contracts significantly
-- security or safety concerns require explicit approval
+Ask for clarification when:
+- trading logic behavior is ambiguous
+- external API behavior materially changes
+- a decision changes external contracts significantly
+- security/safety concern requires explicit approval
 
-Do not block progress when a safe and documented default exists.
+Otherwise continue with safe defaults.
 
-## 9) Continuous Improvement
+## 9) Operational Mindset
 
-The agent is expected to continuously improve:
-- error handling
-- logging
-- safety checks
-- code structure
-- performance where it does not compromise determinism or safety
-
-## 10) Operational Mindset
-
-Treat this as a production system.
+Treat the system as production software.
 Priority order:
 1. correctness
 2. safety
 3. reliability
 4. maintainability
 
-## 11) Final Rule
+## 10) Final Rule
 
-Always ground decisions in `docs/ROADMAP.md` and current repository implementation.
-Documentation must match implemented behavior or clearly mark phased targets.
+Ground every decision in current roadmap + current implementation.
+If implementation and docs differ, either:
+- update implementation to match docs, or
+- clearly mark phased targets and update docs consistently.

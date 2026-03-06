@@ -41,6 +41,19 @@ def make_runtime_config(tmp_path: Path, **overrides) -> RuntimeConfig:
         discord_webhook_url=None,
         discord_timeout_seconds=8.0,
         discord_max_retries=2,
+        data_sources=("ndax", "binance"),
+        dataset_mode="combined",
+        binance_base_url="https://api.binance.com",
+        binance_quote="USDT",
+        bridge_fx_symbol="USDTCAD",
+        synth_weight_min=0.2,
+        synth_weight_max=0.8,
+        synth_weight_refresh="monthly",
+        synth_weight_default=0.6,
+        min_overlap_rows_for_weight=1000,
+        conversion_max_median_ape=0.015,
+        combined_max_gap_count=0,
+        combined_min_coverage=0.999,
     )
     if overrides:
         return replace(cfg, **overrides)

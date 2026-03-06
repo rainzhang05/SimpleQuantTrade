@@ -763,6 +763,345 @@ class StateStore:
                 ).fetchall()
             return [dict(row) for row in rows]
 
+    def upsert_data_sync_checkpoint(
+        self,
+        *,
+        source: str,
+        symbol: str,
+        timeframe: str,
+        requested_from: str,
+        requested_to: str,
+        last_success_ts: int | None,
+        status: str,
+    ) -> None:
+        now = utc_now_iso()
+        with self._connect() as conn:
+            self._apply_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO data_sync_checkpoints (
+                    source, symbol, timeframe, requested_from, requested_to,
+                    last_success_ts, status, updated_at_utc
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source, symbol, timeframe) DO UPDATE SET
+                    requested_from = excluded.requested_from,
+                    requested_to = excluded.requested_to,
+                    last_success_ts = excluded.last_success_ts,
+                    status = excluded.status,
+                    updated_at_utc = excluded.updated_at_utc
+                """,
+                (
+                    source.strip().lower(),
+                    symbol.strip().upper(),
+                    timeframe.strip().lower(),
+                    requested_from,
+                    requested_to,
+                    last_success_ts,
+                    status.strip().lower(),
+                    now,
+                ),
+            )
+
+    def get_data_sync_checkpoints(
+        self,
+        *,
+        source: str | None = None,
+        timeframe: str | None = None,
+    ) -> list[dict[str, object]]:
+        if not self._db_path.exists():
+            return []
+        with self._connect() as conn:
+            self._apply_schema(conn)
+            sql = (
+                "SELECT source, symbol, timeframe, requested_from, requested_to, "
+                "last_success_ts, status, updated_at_utc FROM data_sync_checkpoints"
+            )
+            params: list[object] = []
+            clauses: list[str] = []
+            if source is not None:
+                clauses.append("source = ?")
+                params.append(source.strip().lower())
+            if timeframe is not None:
+                clauses.append("timeframe = ?")
+                params.append(timeframe.strip().lower())
+            if clauses:
+                sql += " WHERE " + " AND ".join(clauses)
+            sql += " ORDER BY source, symbol, timeframe"
+            rows = conn.execute(sql, tuple(params)).fetchall()
+            return [dict(row) for row in rows]
+
+    def upsert_data_coverage_v2(
+        self,
+        *,
+        dataset: str,
+        symbol: str,
+        timeframe: str,
+        first_ts: int | None,
+        last_ts: int | None,
+        row_count: int,
+        gap_count: int,
+        duplicate_count: int,
+        misaligned_count: int,
+        coverage_pct: float,
+        ndax_share: float,
+        synth_share: float,
+    ) -> None:
+        now = utc_now_iso()
+        with self._connect() as conn:
+            self._apply_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO data_coverage_v2 (
+                    dataset, symbol, timeframe, first_ts, last_ts, row_count, gap_count,
+                    duplicate_count, misaligned_count, coverage_pct, ndax_share, synth_share,
+                    updated_at_utc
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(dataset, symbol, timeframe) DO UPDATE SET
+                    first_ts = excluded.first_ts,
+                    last_ts = excluded.last_ts,
+                    row_count = excluded.row_count,
+                    gap_count = excluded.gap_count,
+                    duplicate_count = excluded.duplicate_count,
+                    misaligned_count = excluded.misaligned_count,
+                    coverage_pct = excluded.coverage_pct,
+                    ndax_share = excluded.ndax_share,
+                    synth_share = excluded.synth_share,
+                    updated_at_utc = excluded.updated_at_utc
+                """,
+                (
+                    dataset.strip().lower(),
+                    symbol.strip().upper(),
+                    timeframe.strip().lower(),
+                    first_ts,
+                    last_ts,
+                    int(row_count),
+                    int(gap_count),
+                    int(duplicate_count),
+                    int(misaligned_count),
+                    float(coverage_pct),
+                    float(ndax_share),
+                    float(synth_share),
+                    now,
+                ),
+            )
+
+    def get_data_coverage_v2(
+        self,
+        *,
+        dataset: str | None = None,
+        timeframe: str | None = None,
+    ) -> list[dict[str, object]]:
+        if not self._db_path.exists():
+            return []
+        with self._connect() as conn:
+            self._apply_schema(conn)
+            sql = (
+                "SELECT dataset, symbol, timeframe, first_ts, last_ts, row_count, gap_count, "
+                "duplicate_count, misaligned_count, coverage_pct, ndax_share, synth_share, updated_at_utc "
+                "FROM data_coverage_v2"
+            )
+            params: list[object] = []
+            clauses: list[str] = []
+            if dataset is not None:
+                clauses.append("dataset = ?")
+                params.append(dataset.strip().lower())
+            if timeframe is not None:
+                clauses.append("timeframe = ?")
+                params.append(timeframe.strip().lower())
+            if clauses:
+                sql += " WHERE " + " AND ".join(clauses)
+            sql += " ORDER BY dataset, symbol, timeframe"
+            rows = conn.execute(sql, tuple(params)).fetchall()
+            return [dict(row) for row in rows]
+
+    def insert_conversion_quality(
+        self,
+        *,
+        symbol: str,
+        timeframe: str,
+        period_start: str,
+        period_end: str,
+        overlap_rows: int,
+        median_ape_close: float,
+        median_abs_ret_err: float,
+        ret_corr: float,
+        direction_match: float,
+        basis_median: float,
+        basis_mad: float,
+        quality_pass: bool,
+    ) -> None:
+        now = utc_now_iso()
+        with self._connect() as conn:
+            self._apply_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO conversion_quality (
+                    symbol, timeframe, period_start, period_end, overlap_rows,
+                    median_ape_close, median_abs_ret_err, ret_corr, direction_match,
+                    basis_median, basis_mad, quality_pass, updated_at_utc
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    symbol.strip().upper(),
+                    timeframe.strip().lower(),
+                    period_start,
+                    period_end,
+                    int(overlap_rows),
+                    float(median_ape_close),
+                    float(median_abs_ret_err),
+                    float(ret_corr),
+                    float(direction_match),
+                    float(basis_median),
+                    float(basis_mad),
+                    int(bool(quality_pass)),
+                    now,
+                ),
+            )
+
+    def get_conversion_quality(
+        self,
+        *,
+        symbol: str | None = None,
+        timeframe: str | None = None,
+    ) -> list[dict[str, object]]:
+        if not self._db_path.exists():
+            return []
+        with self._connect() as conn:
+            self._apply_schema(conn)
+            sql = (
+                "SELECT symbol, timeframe, period_start, period_end, overlap_rows, "
+                "median_ape_close, median_abs_ret_err, ret_corr, direction_match, "
+                "basis_median, basis_mad, quality_pass, updated_at_utc "
+                "FROM conversion_quality"
+            )
+            params: list[object] = []
+            clauses: list[str] = []
+            if symbol is not None:
+                clauses.append("symbol = ?")
+                params.append(symbol.strip().upper())
+            if timeframe is not None:
+                clauses.append("timeframe = ?")
+                params.append(timeframe.strip().lower())
+            if clauses:
+                sql += " WHERE " + " AND ".join(clauses)
+            sql += " ORDER BY symbol, period_start"
+            rows = conn.execute(sql, tuple(params)).fetchall()
+            return [dict(row) for row in rows]
+
+    def upsert_synthetic_weight(
+        self,
+        *,
+        symbol: str,
+        timeframe: str,
+        effective_month: str,
+        weight_quality: float,
+        weight_backtest: float,
+        weight_final: float,
+        overlap_rows: int,
+        quality_pass: bool,
+        method_version: str,
+    ) -> None:
+        now = utc_now_iso()
+        with self._connect() as conn:
+            self._apply_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO synthetic_weights (
+                    symbol, timeframe, effective_month, weight_quality, weight_backtest,
+                    weight_final, overlap_rows, quality_pass, method_version, updated_at_utc
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(symbol, timeframe, effective_month) DO UPDATE SET
+                    weight_quality = excluded.weight_quality,
+                    weight_backtest = excluded.weight_backtest,
+                    weight_final = excluded.weight_final,
+                    overlap_rows = excluded.overlap_rows,
+                    quality_pass = excluded.quality_pass,
+                    method_version = excluded.method_version,
+                    updated_at_utc = excluded.updated_at_utc
+                """,
+                (
+                    symbol.strip().upper(),
+                    timeframe.strip().lower(),
+                    effective_month,
+                    float(weight_quality),
+                    float(weight_backtest),
+                    float(weight_final),
+                    int(overlap_rows),
+                    int(bool(quality_pass)),
+                    method_version.strip(),
+                    now,
+                ),
+            )
+
+    def get_synthetic_weights(self, *, timeframe: str | None = None) -> list[dict[str, object]]:
+        if not self._db_path.exists():
+            return []
+        with self._connect() as conn:
+            self._apply_schema(conn)
+            if timeframe is None:
+                rows = conn.execute(
+                    """
+                    SELECT symbol, timeframe, effective_month, weight_quality, weight_backtest,
+                           weight_final, overlap_rows, quality_pass, method_version, updated_at_utc
+                    FROM synthetic_weights
+                    ORDER BY symbol, timeframe, effective_month
+                    """
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT symbol, timeframe, effective_month, weight_quality, weight_backtest,
+                           weight_final, overlap_rows, quality_pass, method_version, updated_at_utc
+                    FROM synthetic_weights
+                    WHERE timeframe = ?
+                    ORDER BY symbol, effective_month
+                    """,
+                    (timeframe.strip().lower(),),
+                ).fetchall()
+            return [dict(row) for row in rows]
+
+    def insert_combined_build(
+        self,
+        *,
+        symbol: str,
+        timeframe: str,
+        from_ts: int,
+        to_ts: int,
+        ndax_rows: int,
+        binance_rows: int,
+        combined_rows: int,
+        gap_count: int,
+        build_hash: str,
+    ) -> None:
+        now = utc_now_iso()
+        with self._connect() as conn:
+            self._apply_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO combined_builds (
+                    symbol, timeframe, from_ts, to_ts, ndax_rows, binance_rows,
+                    combined_rows, gap_count, build_hash, updated_at_utc
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    symbol.strip().upper(),
+                    timeframe.strip().lower(),
+                    int(from_ts),
+                    int(to_ts),
+                    int(ndax_rows),
+                    int(binance_rows),
+                    int(combined_rows),
+                    int(gap_count),
+                    build_hash,
+                    now,
+                ),
+            )
+
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -855,6 +1194,107 @@ class StateStore:
                 updated_at_utc TEXT NOT NULL,
                 PRIMARY KEY(symbol, timeframe)
             )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS data_sync_checkpoints (
+                source TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                requested_from TEXT NOT NULL,
+                requested_to TEXT NOT NULL,
+                last_success_ts INTEGER,
+                status TEXT NOT NULL,
+                updated_at_utc TEXT NOT NULL,
+                PRIMARY KEY(source, symbol, timeframe)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS data_coverage_v2 (
+                dataset TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                first_ts INTEGER,
+                last_ts INTEGER,
+                row_count INTEGER NOT NULL DEFAULT 0,
+                gap_count INTEGER NOT NULL DEFAULT 0,
+                duplicate_count INTEGER NOT NULL DEFAULT 0,
+                misaligned_count INTEGER NOT NULL DEFAULT 0,
+                coverage_pct REAL NOT NULL DEFAULT 0.0,
+                ndax_share REAL NOT NULL DEFAULT 0.0,
+                synth_share REAL NOT NULL DEFAULT 0.0,
+                updated_at_utc TEXT NOT NULL,
+                PRIMARY KEY(dataset, symbol, timeframe)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS conversion_quality (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                period_start TEXT NOT NULL,
+                period_end TEXT NOT NULL,
+                overlap_rows INTEGER NOT NULL,
+                median_ape_close REAL NOT NULL,
+                median_abs_ret_err REAL NOT NULL,
+                ret_corr REAL NOT NULL,
+                direction_match REAL NOT NULL,
+                basis_median REAL NOT NULL,
+                basis_mad REAL NOT NULL,
+                quality_pass INTEGER NOT NULL,
+                updated_at_utc TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS synthetic_weights (
+                symbol TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                effective_month TEXT NOT NULL,
+                weight_quality REAL NOT NULL,
+                weight_backtest REAL NOT NULL,
+                weight_final REAL NOT NULL,
+                overlap_rows INTEGER NOT NULL,
+                quality_pass INTEGER NOT NULL,
+                method_version TEXT NOT NULL,
+                updated_at_utc TEXT NOT NULL,
+                PRIMARY KEY(symbol, timeframe, effective_month)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS combined_builds (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                timeframe TEXT NOT NULL,
+                from_ts INTEGER NOT NULL,
+                to_ts INTEGER NOT NULL,
+                ndax_rows INTEGER NOT NULL,
+                binance_rows INTEGER NOT NULL,
+                combined_rows INTEGER NOT NULL,
+                gap_count INTEGER NOT NULL,
+                build_hash TEXT NOT NULL,
+                updated_at_utc TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_conversion_quality_symbol_tf_period
+            ON conversion_quality(symbol, timeframe, period_start)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_combined_builds_symbol_tf_time
+            ON combined_builds(symbol, timeframe, from_ts, to_ts)
             """
         )
 

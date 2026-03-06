@@ -12,6 +12,7 @@ from typing import Callable
 from qtbot.config import RuntimeConfig, load_runtime_config
 from qtbot.control import Command, read_control, write_control
 from qtbot.cutover import ProductionCutoverChecklist
+from qtbot.binance_client import BinanceClient, BinanceError
 from qtbot.ndax_client import (
     NdaxAuthenticationError,
     NdaxClient,
@@ -93,7 +94,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     data_backfill_parser = subparsers.add_parser(
         "data-backfill",
-        help="Backfill NDAX candle data into local storage.",
+        help="Backfill NDAX/Binance candle data into local storage.",
     )
     data_backfill_parser.add_argument(
         "--from",
@@ -113,6 +114,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Candle timeframe alias (currently supports 15m).",
     )
     data_backfill_parser.add_argument(
+        "--sources",
+        default="ndax,binance",
+        help="Comma-separated data sources: ndax,binance.",
+    )
+    data_backfill_parser.add_argument(
         "--quiet",
         action="store_true",
         help="Disable live progress lines on stderr (JSON summary still printed on stdout).",
@@ -120,12 +126,76 @@ def build_parser() -> argparse.ArgumentParser:
 
     data_status_parser = subparsers.add_parser(
         "data-status",
-        help="Show local candle coverage and gap status.",
+        help="Show local candle coverage and gap status for selected dataset(s).",
     )
     data_status_parser.add_argument(
         "--timeframe",
         default="15m",
         help="Timeframe alias to inspect (currently supports 15m).",
+    )
+    data_status_parser.add_argument(
+        "--dataset",
+        default="combined",
+        help="Dataset to inspect: ndax|binance|combined|all.",
+    )
+
+    data_build_combined_parser = subparsers.add_parser(
+        "data-build-combined",
+        help="Build normalized combined NDAX+Binance CAD dataset.",
+    )
+    data_build_combined_parser.add_argument(
+        "--from",
+        dest="from_date",
+        required=True,
+        help="Start date in YYYY-MM-DD (UTC).",
+    )
+    data_build_combined_parser.add_argument(
+        "--to",
+        dest="to_date",
+        required=True,
+        help="End date in YYYY-MM-DD (UTC).",
+    )
+    data_build_combined_parser.add_argument(
+        "--timeframe",
+        default="15m",
+        help="Timeframe alias (currently supports 15m).",
+    )
+
+    data_calibrate_parser = subparsers.add_parser(
+        "data-calibrate-weights",
+        help="Calibrate synthetic data weighting from NDAX/Binance overlap.",
+    )
+    data_calibrate_parser.add_argument(
+        "--from",
+        dest="from_date",
+        required=True,
+        help="Start date in YYYY-MM-DD (UTC).",
+    )
+    data_calibrate_parser.add_argument(
+        "--to",
+        dest="to_date",
+        required=True,
+        help="End date in YYYY-MM-DD (UTC).",
+    )
+    data_calibrate_parser.add_argument(
+        "--timeframe",
+        default="15m",
+        help="Timeframe alias (currently supports 15m).",
+    )
+    data_calibrate_parser.add_argument(
+        "--refresh",
+        default="monthly",
+        help="Weight refresh cadence (currently supports monthly).",
+    )
+
+    data_weight_status_parser = subparsers.add_parser(
+        "data-weight-status",
+        help="Show latest per-symbol synthetic weight status.",
+    )
+    data_weight_status_parser.add_argument(
+        "--timeframe",
+        default="15m",
+        help="Timeframe alias (currently supports 15m).",
     )
 
     staging_parser = subparsers.add_parser(
@@ -241,10 +311,32 @@ def main(argv: list[str] | None = None) -> int:
             from_date=args.from_date,
             to_date=args.to_date,
             timeframe=args.timeframe,
+            sources=args.sources,
             quiet=args.quiet,
         )
     if command == "data-status":
         return _handle_data_status(
+            config=config,
+            timeframe=args.timeframe,
+            dataset=args.dataset,
+        )
+    if command == "data-build-combined":
+        return _handle_data_build_combined(
+            config=config,
+            from_date=args.from_date,
+            to_date=args.to_date,
+            timeframe=args.timeframe,
+        )
+    if command == "data-calibrate-weights":
+        return _handle_data_calibrate_weights(
+            config=config,
+            from_date=args.from_date,
+            to_date=args.to_date,
+            timeframe=args.timeframe,
+            refresh=args.refresh,
+        )
+    if command == "data-weight-status":
+        return _handle_data_weight_status(
             config=config,
             timeframe=args.timeframe,
         )
@@ -513,6 +605,7 @@ def _handle_data_backfill(
     from_date: str,
     to_date: str,
     timeframe: str,
+    sources: str,
     quiet: bool = False,
 ) -> int:
     progress_callback, progress_log = _build_data_backfill_progress_writer(
@@ -533,8 +626,9 @@ def _handle_data_backfill(
             from_date=parsed_from,
             to_date=parsed_to,
             timeframe=timeframe,
+            sources=_parse_sources_csv(sources),
         )
-    except (NdaxError, ValueError) as exc:
+    except (NdaxError, BinanceError, ValueError) as exc:
         progress_callback(f"data_backfill_failed reason={exc}")
         print(f"Data backfill failed: {exc}", file=sys.stderr)
         return 1
@@ -549,13 +643,84 @@ def _handle_data_status(
     *,
     config: RuntimeConfig,
     timeframe: str,
+    dataset: str,
 ) -> int:
     try:
         service = _make_data_service(config)
-        summary = service.data_status(timeframe=timeframe)
-    except (NdaxError, ValueError) as exc:
+        summary = service.data_status(timeframe=timeframe, dataset=dataset)
+    except (NdaxError, BinanceError, ValueError) as exc:
         print(f"Data status failed: {exc}", file=sys.stderr)
         return 1
+    print(json.dumps(summary.to_payload(), indent=2, sort_keys=True))
+    return 0
+
+
+def _handle_data_build_combined(
+    *,
+    config: RuntimeConfig,
+    from_date: str,
+    to_date: str,
+    timeframe: str,
+) -> int:
+    try:
+        parsed_from = _parse_date(from_date)
+        parsed_to = _parse_date(to_date)
+        if parsed_from > parsed_to:
+            raise ValueError("--from must be <= --to")
+        service = _make_data_service(config)
+        summary = service.build_combined(
+            from_date=parsed_from,
+            to_date=parsed_to,
+            timeframe=timeframe,
+        )
+    except (NdaxError, BinanceError, ValueError) as exc:
+        print(f"Combined dataset build failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(json.dumps(summary.to_payload(), indent=2, sort_keys=True))
+    return 0 if summary.symbols_with_errors == 0 else 1
+
+
+def _handle_data_calibrate_weights(
+    *,
+    config: RuntimeConfig,
+    from_date: str,
+    to_date: str,
+    timeframe: str,
+    refresh: str,
+) -> int:
+    try:
+        parsed_from = _parse_date(from_date)
+        parsed_to = _parse_date(to_date)
+        if parsed_from > parsed_to:
+            raise ValueError("--from must be <= --to")
+        service = _make_data_service(config)
+        summary = service.calibrate_weights(
+            from_date=parsed_from,
+            to_date=parsed_to,
+            timeframe=timeframe,
+            refresh=refresh,
+        )
+    except (NdaxError, BinanceError, ValueError) as exc:
+        print(f"Weight calibration failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(json.dumps(summary.to_payload(), indent=2, sort_keys=True))
+    return 0
+
+
+def _handle_data_weight_status(
+    *,
+    config: RuntimeConfig,
+    timeframe: str,
+) -> int:
+    try:
+        service = _make_data_service(config)
+        summary = service.weight_status(timeframe=timeframe)
+    except (NdaxError, BinanceError, ValueError) as exc:
+        print(f"Weight status failed: {exc}", file=sys.stderr)
+        return 1
+
     print(json.dumps(summary.to_payload(), indent=2, sort_keys=True))
     return 0
 
@@ -631,6 +796,14 @@ def _make_ndax_client(config: RuntimeConfig) -> NdaxClient:
     )
 
 
+def _make_binance_client(config: RuntimeConfig) -> BinanceClient:
+    return BinanceClient(
+        base_url=config.binance_base_url,
+        timeout_seconds=config.ndax_timeout_seconds,
+        max_retries=config.ndax_max_retries,
+    )
+
+
 def _make_data_service(
     config: RuntimeConfig,
     *,
@@ -640,10 +813,12 @@ def _make_data_service(
     from qtbot.data import MarketDataService
 
     client = _make_ndax_client(config)
+    binance_client = _make_binance_client(config)
     state_store = StateStore(config.state_db)
     return MarketDataService(
         config=config,
         ndax_client=client,
+        binance_client=binance_client,
         state_store=state_store,
         progress_callback=progress_callback,
     )
@@ -670,6 +845,10 @@ def _build_data_backfill_progress_writer(
 
 def _parse_date(raw_value: str):
     return datetime.strptime(raw_value, "%Y-%m-%d").date()
+
+
+def _parse_sources_csv(raw_value: str) -> list[str]:
+    return [item.strip() for item in raw_value.split(",") if item.strip()]
 
 
 def _find_instrument_by_symbol(instruments: list[dict[str, object]], symbol: str) -> dict[str, object] | None:

@@ -42,10 +42,12 @@ class _FakeNdaxClient:
         self._instruments = [
             {"Product1Symbol": "BTC", "Product2Symbol": "CAD", "Symbol": "BTCCAD", "InstrumentId": 1},
             {"Product1Symbol": "ETH", "Product2Symbol": "CAD", "Symbol": "ETHCAD", "InstrumentId": 2},
+            {"Product1Symbol": "USDT", "Product2Symbol": "CAD", "Symbol": "USDTCAD", "InstrumentId": 3},
         ]
         self._rows_by_instrument = {
             1: _generate_15m_rows(start_ts_ms=_ts_ms(2026, 1, 1, 0, 0), periods=96 * 3, instrument_id=1),
             2: _generate_15m_rows(start_ts_ms=_ts_ms(2026, 1, 1, 0, 0), periods=96 * 3, instrument_id=2),
+            3: _generate_15m_rows(start_ts_ms=_ts_ms(2026, 1, 1, 0, 0), periods=96 * 3, instrument_id=3),
         }
 
     def get_instruments(self):
@@ -70,6 +72,49 @@ class _FakeNdaxClientWithGap(_FakeNdaxClient):
         self._rows_by_instrument[2] = [row for idx, row in enumerate(rows) if idx != 10]
 
 
+class _FakeBinanceClient:
+    def __init__(self) -> None:
+        self._symbols = {"BTCUSDT", "ETHUSDT"}
+        self._rows_by_symbol = {
+            "BTCUSDT": self._generate_rows(start_ts_ms=_ts_ms(2026, 1, 1, 0, 0), periods=96 * 3, seed=70.0),
+            "ETHUSDT": self._generate_rows(start_ts_ms=_ts_ms(2026, 1, 1, 0, 0), periods=96 * 3, seed=50.0),
+        }
+
+    def list_spot_symbols(self):
+        return set(self._symbols)
+
+    def get_klines(self, *, symbol: str, interval: str, start_time_ms: int, end_time_ms: int, limit: int = 1000):
+        if interval != "15m":
+            return []
+        rows = self._rows_by_symbol.get(symbol.upper(), [])
+        filtered = [row for row in rows if start_time_ms <= int(row[0]) <= end_time_ms]
+        return filtered[:limit]
+
+    @staticmethod
+    def _generate_rows(*, start_ts_ms: int, periods: int, seed: float) -> list[list[float]]:
+        rows: list[list[float]] = []
+        for idx in range(periods):
+            ts = start_ts_ms + (idx * 900_000)
+            price = seed + (idx * 0.07)
+            rows.append(
+                [
+                    ts,
+                    price,
+                    price + 0.4,
+                    price - 0.4,
+                    price + 0.15,
+                    20.0 + idx,
+                    ts + 899_999,
+                    0.0,
+                    0,
+                    0.0,
+                    0.0,
+                    0.0,
+                ]
+            )
+        return rows
+
+
 class DataServiceTests(unittest.TestCase):
     def test_parse_timeframe_seconds(self) -> None:
         self.assertEqual(parse_timeframe_seconds("15m"), 900)
@@ -91,6 +136,7 @@ class DataServiceTests(unittest.TestCase):
                 from_date=date(2026, 1, 1),
                 to_date=date(2026, 1, 2),
                 timeframe="15m",
+                sources=["ndax"],
             )
             self.assertEqual(first.symbols_with_errors, 0)
 
@@ -98,6 +144,7 @@ class DataServiceTests(unittest.TestCase):
                 from_date=date(2026, 1, 1),
                 to_date=date(2026, 1, 3),
                 timeframe="15m",
+                sources=["ndax"],
             )
             self.assertEqual(second.symbols_with_errors, 0)
 
@@ -111,6 +158,7 @@ class DataServiceTests(unittest.TestCase):
                 from_date=date(2026, 1, 1),
                 to_date=date(2026, 1, 3),
                 timeframe="15m",
+                sources=["ndax"],
             )
             self.assertEqual(third.symbols_with_errors, 0)
             btc_rows_after = pq.read_table(btc_file).num_rows
@@ -131,11 +179,13 @@ class DataServiceTests(unittest.TestCase):
                 from_date=date(2026, 1, 3),
                 to_date=date(2026, 1, 3),
                 timeframe="15m",
+                sources=["ndax"],
             )
             expanded = service.backfill(
                 from_date=date(2026, 1, 1),
                 to_date=date(2026, 1, 3),
                 timeframe="15m",
+                sources=["ndax"],
             )
 
             btc_file = Path(td) / "data" / "raw" / "ndax" / "15m" / "BTCCAD.parquet"
@@ -147,6 +197,7 @@ class DataServiceTests(unittest.TestCase):
                 from_date=date(2026, 1, 1),
                 to_date=date(2026, 1, 3),
                 timeframe="15m",
+                sources=["ndax"],
             )
             btc_expanded = next(item for item in expanded.symbols if item.symbol == "BTCCAD")
             btc_rerun = next(item for item in rerun.symbols if item.symbol == "BTCCAD")
@@ -166,14 +217,61 @@ class DataServiceTests(unittest.TestCase):
                 from_date=date(2026, 1, 1),
                 to_date=date(2026, 1, 3),
                 timeframe="15m",
+                sources=["ndax"],
             )
-            status = service.data_status(timeframe="15m")
+            status = service.data_status(timeframe="15m", dataset="ndax")
             eth = next(item for item in status.symbols if item.symbol == "ETHCAD")
             self.assertGreater(eth.gap_count, 0)
             self.assertEqual(eth.status, "ok")
 
             coverage_rows = store.get_data_coverage(timeframe="15m")
             self.assertTrue(any(row["symbol"] == "ETHCAD" for row in coverage_rows))
+
+    def test_dual_source_backfill_and_combined_pipeline(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = make_runtime_config(Path(td))
+            store = StateStore(cfg.state_db)
+            service = MarketDataService(
+                config=cfg,
+                ndax_client=_FakeNdaxClient(),
+                binance_client=_FakeBinanceClient(),
+                state_store=store,
+            )
+
+            summary = service.backfill(
+                from_date=date(2026, 1, 1),
+                to_date=date(2026, 1, 3),
+                timeframe="15m",
+                sources=["ndax", "binance"],
+            )
+            self.assertEqual(summary.symbols_with_errors, 0)
+            self.assertTrue(any(item.source == "ndax" for item in summary.symbols))
+            self.assertTrue(any(item.source == "binance" for item in summary.symbols))
+
+            status_all = service.data_status(timeframe="15m", dataset="all")
+            payload = status_all.to_payload()
+            self.assertEqual(payload["dataset"], "all")
+            self.assertIn("combined", payload["datasets"])
+
+            combined = service.build_combined(
+                from_date=date(2026, 1, 1),
+                to_date=date(2026, 1, 3),
+                timeframe="15m",
+            )
+            self.assertEqual(combined.symbols_with_errors, 0)
+            self.assertTrue(any(item.combined_rows > 0 for item in combined.symbols))
+
+            calibration = service.calibrate_weights(
+                from_date=date(2026, 1, 1),
+                to_date=date(2026, 1, 3),
+                timeframe="15m",
+                refresh="monthly",
+            )
+            self.assertGreater(calibration.rows_total, 0)
+            self.assertTrue(Path(calibration.output_file).exists())
+
+            weights = service.weight_status(timeframe="15m")
+            self.assertGreaterEqual(weights.row_count, 1)
 
 
 if __name__ == "__main__":

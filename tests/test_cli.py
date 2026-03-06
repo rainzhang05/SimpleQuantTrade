@@ -78,12 +78,15 @@ class CliTests(unittest.TestCase):
                 "2026-03-05",
                 "--timeframe",
                 "15m",
+                "--sources",
+                "ndax,binance",
             ]
         )
         self.assertEqual(args.command, "data-backfill")
         self.assertEqual(args.from_date, "2026-01-01")
         self.assertEqual(args.to_date, "2026-03-05")
         self.assertEqual(args.timeframe, "15m")
+        self.assertEqual(args.sources, "ndax,binance")
         self.assertFalse(args.quiet)
 
     def test_parser_accepts_data_backfill_quiet_flag(self) -> None:
@@ -103,8 +106,51 @@ class CliTests(unittest.TestCase):
 
     def test_parser_accepts_data_status_flags(self) -> None:
         parser = build_parser()
-        args = parser.parse_args(["data-status", "--timeframe", "15m"])
+        args = parser.parse_args(["data-status", "--timeframe", "15m", "--dataset", "combined"])
         self.assertEqual(args.command, "data-status")
+        self.assertEqual(args.timeframe, "15m")
+        self.assertEqual(args.dataset, "combined")
+
+    def test_parser_accepts_data_build_combined_flags(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "data-build-combined",
+                "--from",
+                "2026-01-01",
+                "--to",
+                "2026-03-05",
+                "--timeframe",
+                "15m",
+            ]
+        )
+        self.assertEqual(args.command, "data-build-combined")
+        self.assertEqual(args.from_date, "2026-01-01")
+        self.assertEqual(args.to_date, "2026-03-05")
+        self.assertEqual(args.timeframe, "15m")
+
+    def test_parser_accepts_data_calibrate_weights_flags(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "data-calibrate-weights",
+                "--from",
+                "2026-01-01",
+                "--to",
+                "2026-03-05",
+                "--timeframe",
+                "15m",
+                "--refresh",
+                "monthly",
+            ]
+        )
+        self.assertEqual(args.command, "data-calibrate-weights")
+        self.assertEqual(args.refresh, "monthly")
+
+    def test_parser_accepts_data_weight_status_flags(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["data-weight-status", "--timeframe", "15m"])
+        self.assertEqual(args.command, "data-weight-status")
         self.assertEqual(args.timeframe, "15m")
 
 
