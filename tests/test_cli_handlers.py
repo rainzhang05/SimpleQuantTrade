@@ -44,6 +44,139 @@ def _capture_output(func, *args, **kwargs):
 
 
 class CliHandlerTests(unittest.TestCase):
+    def test_main_dispatches_all_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = make_runtime_config(Path(td))
+            with (
+                mock.patch("qtbot.cli.load_runtime_config", return_value=cfg),
+                mock.patch("qtbot.cli._handle_start", return_value=0) as h_start,
+                mock.patch("qtbot.cli._handle_control_write", return_value=0) as h_control,
+                mock.patch("qtbot.cli._handle_status", return_value=0) as h_status,
+                mock.patch("qtbot.cli._handle_ndax_pairs", return_value=0) as h_pairs,
+                mock.patch("qtbot.cli._handle_ndax_candles", return_value=0) as h_candles,
+                mock.patch("qtbot.cli._handle_ndax_balances", return_value=0) as h_balances,
+                mock.patch("qtbot.cli._handle_ndax_check", return_value=0) as h_check,
+                mock.patch("qtbot.cli._handle_data_backfill", return_value=0) as h_backfill,
+                mock.patch("qtbot.cli._handle_data_status", return_value=0) as h_status_data,
+                mock.patch("qtbot.cli._handle_data_build_combined", return_value=0) as h_build_combined,
+                mock.patch("qtbot.cli._handle_data_calibrate_weights", return_value=0) as h_calibrate,
+                mock.patch("qtbot.cli._handle_data_weight_status", return_value=0) as h_weight_status,
+                mock.patch("qtbot.cli._handle_staging_validate", return_value=0) as h_staging,
+                mock.patch("qtbot.cli._handle_cutover_checklist", return_value=0) as h_cutover,
+            ):
+                self.assertEqual(cli.main(["start", "--budget", "100"]), 0)
+                h_start.assert_called_once()
+
+                self.assertEqual(cli.main(["pause"]), 0)
+                self.assertEqual(cli.main(["resume"]), 0)
+                self.assertEqual(cli.main(["stop"]), 0)
+                self.assertEqual(h_control.call_count, 3)
+
+                self.assertEqual(cli.main(["status"]), 0)
+                h_status.assert_called_once()
+
+                self.assertEqual(cli.main(["ndax-pairs"]), 0)
+                h_pairs.assert_called_once()
+
+                self.assertEqual(
+                    cli.main(
+                        [
+                            "ndax-candles",
+                            "--symbol",
+                            "SOLCAD",
+                            "--from-date",
+                            "2026-03-01",
+                            "--to-date",
+                            "2026-03-02",
+                        ]
+                    ),
+                    0,
+                )
+                h_candles.assert_called_once()
+
+                self.assertEqual(cli.main(["ndax-balances"]), 0)
+                h_balances.assert_called_once()
+
+                self.assertEqual(
+                    cli.main(
+                        [
+                            "ndax-check",
+                            "--symbol",
+                            "SOLCAD",
+                            "--from-date",
+                            "2026-03-01",
+                            "--to-date",
+                            "2026-03-02",
+                        ]
+                    ),
+                    0,
+                )
+                h_check.assert_called_once()
+
+                self.assertEqual(
+                    cli.main(
+                        [
+                            "data-backfill",
+                            "--from",
+                            "2026-01-01",
+                            "--to",
+                            "2026-01-03",
+                            "--sources",
+                            "ndax,binance",
+                        ]
+                    ),
+                    0,
+                )
+                h_backfill.assert_called_once()
+
+                self.assertEqual(cli.main(["data-status", "--dataset", "combined"]), 0)
+                h_status_data.assert_called_once()
+
+                self.assertEqual(
+                    cli.main(
+                        [
+                            "data-build-combined",
+                            "--from",
+                            "2026-01-01",
+                            "--to",
+                            "2026-01-03",
+                        ]
+                    ),
+                    0,
+                )
+                h_build_combined.assert_called_once()
+
+                self.assertEqual(
+                    cli.main(
+                        [
+                            "data-calibrate-weights",
+                            "--from",
+                            "2026-01-01",
+                            "--to",
+                            "2026-01-03",
+                            "--refresh",
+                            "monthly",
+                        ]
+                    ),
+                    0,
+                )
+                h_calibrate.assert_called_once()
+
+                self.assertEqual(cli.main(["data-weight-status"]), 0)
+                h_weight_status.assert_called_once()
+
+                self.assertEqual(cli.main(["staging-validate", "--offline-only"]), 0)
+                h_staging.assert_called_once()
+
+                self.assertEqual(cli.main(["cutover-checklist", "--offline-only"]), 0)
+                h_cutover.assert_called_once()
+
+    def test_main_returns_2_when_config_load_fails(self) -> None:
+        with mock.patch("qtbot.cli.load_runtime_config", side_effect=RuntimeError("bad config")):
+            code, _, err = _capture_output(cli.main, ["status"])
+        self.assertEqual(code, 2)
+        self.assertIn("Failed to load runtime config", err)
+
     def test_handle_control_write_and_status(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = make_runtime_config(Path(td))
@@ -106,6 +239,17 @@ class CliHandlerTests(unittest.TestCase):
                 self.assertEqual(code, 1)
                 self.assertIn("NDAX candle fetch failed", err)
 
+                code, _, err = _capture_output(
+                    cli._handle_ndax_candles,
+                    config=cfg,
+                    symbol="SOLCAD",
+                    interval=0,
+                    from_date="2026-03-04",
+                    to_date="2026-03-05",
+                )
+                self.assertEqual(code, 2)
+                self.assertIn("--interval must be > 0", err)
+
     def test_handle_ndax_balances(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = make_runtime_config(Path(td))
@@ -124,6 +268,15 @@ class CliHandlerTests(unittest.TestCase):
                 code, _, err = _capture_output(cli._handle_ndax_balances, config=cfg)
                 self.assertEqual(code, 1)
                 self.assertIn("NDAX authentication failed", err)
+
+            bad_client = _FakeClient()
+            bad_client.fetch_balances = mock.Mock(side_effect=NdaxError("down"))  # type: ignore[method-assign]
+            with mock.patch("qtbot.cli._make_ndax_client", return_value=bad_client), mock.patch(
+                "qtbot.cli.load_credentials_from_env", return_value=mock.Mock()
+            ):
+                code, _, err = _capture_output(cli._handle_ndax_balances, config=cfg)
+                self.assertEqual(code, 1)
+                self.assertIn("NDAX balance fetch failed", err)
 
     def test_handle_ndax_check(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -163,6 +316,20 @@ class CliHandlerTests(unittest.TestCase):
                 payload = json.loads(out)
                 self.assertTrue(payload["balance_check_skipped"])
 
+            with mock.patch("qtbot.cli._make_ndax_client", return_value=_FakeClient()):
+                code, _, err = _capture_output(
+                    cli._handle_ndax_check,
+                    config=cfg,
+                    symbol="SOLCAD",
+                    interval=0,
+                    from_date="2026-03-04",
+                    to_date="2026-03-05",
+                    skip_balances=True,
+                    require_balances=False,
+                )
+                self.assertEqual(code, 2)
+                self.assertIn("--interval must be > 0", err)
+
     def test_handle_data_backfill(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = make_runtime_config(Path(td))
@@ -191,6 +358,18 @@ class CliHandlerTests(unittest.TestCase):
             self.assertIn("progress_log_file", payload)
             service.backfill.assert_called_once()
 
+            service.backfill.side_effect = ValueError("bad window")
+            code, _, err = _capture_output(
+                cli._handle_data_backfill,
+                config=cfg,
+                from_date="2026-01-10",
+                to_date="2026-01-01",
+                timeframe="15m",
+                sources="ndax",
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("Data backfill failed", err)
+
     def test_handle_data_status(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = make_runtime_config(Path(td))
@@ -213,6 +392,16 @@ class CliHandlerTests(unittest.TestCase):
             payload = json.loads(out)
             self.assertEqual(payload["symbols_total"], 5)
             service.data_status.assert_called_once_with(timeframe="15m", dataset="combined")
+
+            service.data_status.side_effect = ValueError("bad dataset")
+            code, _, err = _capture_output(
+                cli._handle_data_status,
+                config=cfg,
+                timeframe="15m",
+                dataset="nope",
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("Data status failed", err)
 
     def test_handle_data_build_combined(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -240,6 +429,17 @@ class CliHandlerTests(unittest.TestCase):
             self.assertEqual(payload["symbols_total"], 2)
             service.build_combined.assert_called_once()
 
+            service.build_combined.side_effect = ValueError("boom")
+            code, _, err = _capture_output(
+                cli._handle_data_build_combined,
+                config=cfg,
+                from_date="2026-01-03",
+                to_date="2026-01-01",
+                timeframe="15m",
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("Combined dataset build failed", err)
+
     def test_handle_data_calibrate_weights(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = make_runtime_config(Path(td))
@@ -266,6 +466,18 @@ class CliHandlerTests(unittest.TestCase):
             self.assertEqual(payload["rows_total"], 10)
             service.calibrate_weights.assert_called_once()
 
+            service.calibrate_weights.side_effect = ValueError("boom")
+            code, _, err = _capture_output(
+                cli._handle_data_calibrate_weights,
+                config=cfg,
+                from_date="2026-01-03",
+                to_date="2026-01-01",
+                timeframe="15m",
+                refresh="monthly",
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("Weight calibration failed", err)
+
     def test_handle_data_weight_status(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = make_runtime_config(Path(td))
@@ -287,6 +499,16 @@ class CliHandlerTests(unittest.TestCase):
             payload = json.loads(out)
             self.assertEqual(payload["row_count"], 3)
             service.weight_status.assert_called_once_with(timeframe="15m")
+
+            service.weight_status.side_effect = ValueError("boom")
+            with mock.patch("qtbot.cli._make_data_service", return_value=service):
+                code, _, err = _capture_output(
+                    cli._handle_data_weight_status,
+                    config=cfg,
+                    timeframe="15m",
+                )
+            self.assertEqual(code, 1)
+            self.assertIn("Weight status failed", err)
 
     def test_handle_start_and_main_dispatch(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -333,6 +555,32 @@ class CliHandlerTests(unittest.TestCase):
             payload = json.loads(out)
             self.assertTrue(payload["passed"])
 
+            code, _, err = _capture_output(
+                cli._handle_staging_validate,
+                config=cfg,
+                budget_cad=1000.0,
+                cadence_seconds=0,
+                min_loops=1,
+                timeout_seconds=60,
+                offline_only=True,
+            )
+            self.assertEqual(code, 2)
+            self.assertIn("--cadence-seconds must be > 0", err)
+
+            with mock.patch("qtbot.cli.StagingValidator") as validator_cls:
+                validator_cls.return_value.run.side_effect = RuntimeError("bad")
+                code, _, err = _capture_output(
+                    cli._handle_staging_validate,
+                    config=cfg,
+                    budget_cad=1000.0,
+                    cadence_seconds=3,
+                    min_loops=2,
+                    timeout_seconds=60,
+                    offline_only=True,
+                )
+            self.assertEqual(code, 1)
+            self.assertIn("Staging validation failed", err)
+
     def test_handle_cutover_checklist(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = make_runtime_config(Path(td))
@@ -364,6 +612,30 @@ class CliHandlerTests(unittest.TestCase):
             self.assertEqual(code, 0)
             payload = json.loads(out)
             self.assertTrue(payload["passed"])
+
+            code, _, err = _capture_output(
+                cli._handle_cutover_checklist,
+                config=cfg,
+                start_budget_cad=250.0,
+                staging_max_age_hours=0,
+                offline_only=True,
+                require_discord=False,
+            )
+            self.assertEqual(code, 2)
+            self.assertIn("--staging-max-age-hours must be > 0", err)
+
+            with mock.patch("qtbot.cli.ProductionCutoverChecklist") as cutover_cls:
+                cutover_cls.return_value.run.side_effect = RuntimeError("bad")
+                code, _, err = _capture_output(
+                    cli._handle_cutover_checklist,
+                    config=cfg,
+                    start_budget_cad=250.0,
+                    staging_max_age_hours=48,
+                    offline_only=True,
+                    require_discord=False,
+                )
+            self.assertEqual(code, 1)
+            self.assertIn("Cutover checklist failed", err)
 
 
 if __name__ == "__main__":
