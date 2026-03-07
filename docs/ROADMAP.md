@@ -216,6 +216,7 @@ Eligibility metadata persisted per symbol-month:
 - Binary cost-aware next-bar classification.
 - Persist `forward_return` and `y`.
 - `y=1` only when forward return exceeds cost-adjusted threshold.
+- snapshot experiments may override the label horizon with `--label-horizon-bars <N>`; labels then use the next contiguous `N` closed 15m bars.
 
 ### 7.3 Snapshot contract (implemented for Phase 5)
 Snapshot path:
@@ -228,6 +229,8 @@ Required files:
 Closed-bar cutoff rule:
 - `build-snapshot --asof <ISO_TIME>` includes only bars with `timestamp_ms < floor(asof, 15m)`.
 - labels are emitted only when the next contiguous 15m bar is also closed.
+- `build-snapshot --label-horizon-bars <N>` requires the next contiguous `N` closed 15m bars.
+- `build-snapshot --exclude-symbols BTC,ETHCAD,...` excludes those symbols from the sealed experiment snapshot and records the exclusion list in the manifest.
 
 Row contract in `rows.parquet`:
 - market columns retained: `open`, `high`, `low`, `close`, `volume`, `inside_bid`, `inside_ask`
@@ -249,6 +252,7 @@ Phase 5 weighting rules:
 
 Snapshot hash contract:
 - dataset hash is computed over snapshot row order, source tags, weights, and label fields
+- dataset hash also includes the snapshot experiment definition (`label_horizon_bars`, `excluded_symbols`)
 - row order is deterministic: Universe V1 symbol order, then ascending `timestamp_ms`
 - manifest includes per-symbol parity checks and source-mix audits
 
@@ -270,6 +274,7 @@ Snapshot hash contract:
   - `qtbot train --snapshot <SNAPSHOT_ID> --folds <N> --universe V1`
   - `qtbot eval --run <RUN_ID>`
   - `qtbot attribution --run <RUN_ID>`
+  - `qtbot backtest --run <RUN_ID>`
 - Scenario execution rule:
   - `weighted_combined` is required and must train on every built fold
   - `ndax_only` is best-effort and may be partial/skipped on folds that lack NDAX train/validate rows or both classes
@@ -282,6 +287,8 @@ Training artifact layout:
 - `runtime/research/training/<RUN_ID>/metrics.json`
 - `runtime/research/training/<RUN_ID>/coin_attribution.json`
 - `runtime/research/training/<RUN_ID>/coin_attribution.md`
+- `runtime/research/training/<RUN_ID>/backtests/<BACKTEST_ID>/summary.json`
+- `runtime/research/training/<RUN_ID>/backtests/<BACKTEST_ID>/trades.parquet`
 - `runtime/research/training/<RUN_ID>/predictions/fold_<NN>/<scenario>.parquet`
 - `runtime/research/training/<RUN_ID>/models/global/<scenario>/fold_<NN>.txt`
 - `runtime/research/training/<RUN_ID>/models/per_coin/<SYMBOL>/<scenario>/fold_<NN>.txt`
@@ -294,6 +301,25 @@ Feature contract (implemented v1):
 ### 8.3 Cost model defaults
 - Fee baseline: `QTBOT_FEE_PCT_PER_SIDE=0.002` (0.2% per side)
 - Slippage model configurable.
+- Research portfolio backtest defaults:
+  - `QTBOT_BACKTEST_INITIAL_CAPITAL_CAD=10000`
+  - `QTBOT_BACKTEST_MAX_ACTIVE_POSITIONS=3`
+  - `QTBOT_BACKTEST_POSITION_FRACTION=0.25`
+  - `QTBOT_BACKTEST_SLIPPAGE_PCT_PER_SIDE=0.0`
+
+### 8.3a Portfolio backtest contract
+- `qtbot backtest --run <RUN_ID>` replays persisted validation predictions as a cash-constrained long-only research portfolio.
+- Default scenario is the accepted promotion scenario when present; otherwise it falls back to the training run `primary_scenario`.
+- One open position per symbol, fixed fraction sizing, maximum concurrent positions, fee + optional slippage on both sides.
+- Positions hold for exactly the snapshot label horizon and do not overlap on the same symbol.
+- Backtest outputs:
+  - final equity
+  - total and annualized return percentages
+  - max drawdown percentage
+  - trade count / win rate
+  - source mix PnL
+  - symbol-level PnL
+  - monthly returns
 
 ### 8.4 Conservative promotion defaults
 - `entry_threshold=0.60`
@@ -310,11 +336,13 @@ Feature contract (implemented v1):
   - `qtbot promote --run <RUN_ID>`
   - `qtbot model-status`
   - `qtbot set-active-bundle <BUNDLE_ID>`
-- Promotion selects the evaluated `primary_scenario` only.
+- Evaluation still records a research `primary_scenario`, but promotion independently chooses the best scenario that passes hard gates under the configured promotion thresholds.
+- Promotion gate metrics are recomputed from persisted prediction artifacts at `QTBOT_PROMOTION_ENTRY_THRESHOLD`, not the evaluator's default research threshold.
 - Bundle models are refit on all trainable rows allowed by the promoted scenario; fold models are research artifacts and are not published directly.
 - Per-coin models are optional:
   - passing global metrics can still promote a bundle
   - weak per-coin models are omitted individually based on attribution + promotion gates
+- conversion pass-rate for synthetic scenarios is measured from the current `synthetic_weights.supervised_eligible` state for snapshot symbols; `ndax_only` bundles do not apply the synthetic conversion gate
 - Attribution bad-kind precedence for per-coin omission:
   - `sparse_history`
   - `cost_fragility`
@@ -380,7 +408,7 @@ Defaults:
 - `data-status` dataset default to `combined`
 
 ### 11.3 Snapshot command (implemented)
-- `qtbot build-snapshot --asof <ISO_TIME> --timeframe 15m`
+- `qtbot build-snapshot --asof <ISO_TIME> --timeframe 15m [--label-horizon-bars N] [--exclude-symbols BTC,ETHCAD,...]`
 
 Defaults:
 - dataset source comes from `QTBOT_DATASET_MODE` (default `combined`)
@@ -389,6 +417,7 @@ Defaults:
 ### 11.4 Training/model commands
 - `qtbot train --snapshot <SNAPSHOT_ID> --folds <N> --universe V1`
 - `qtbot eval --run <RUN_ID>`
+- `qtbot backtest --run <RUN_ID>`
 - `qtbot attribution --run <RUN_ID>`
 - `qtbot promote --run <RUN_ID>`
 - `qtbot model-status`

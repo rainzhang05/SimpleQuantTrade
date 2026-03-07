@@ -59,6 +59,11 @@ class RuntimeConfigTests(unittest.TestCase):
                         "QTBOT_CONVERSION_MAX_MEDIAN_APE=0.02",
                         "QTBOT_COMBINED_MAX_GAP_COUNT=1",
                         "QTBOT_COMBINED_MIN_COVERAGE=0.98",
+                        "QTBOT_LABEL_HORIZON_BARS=4",
+                        "QTBOT_BACKTEST_INITIAL_CAPITAL_CAD=25000",
+                        "QTBOT_BACKTEST_MAX_ACTIVE_POSITIONS=5",
+                        "QTBOT_BACKTEST_POSITION_FRACTION=0.2",
+                        "QTBOT_BACKTEST_SLIPPAGE_PCT_PER_SIDE=0.0005",
                         "QTBOT_PROMOTION_MIN_FOLDS=10",
                         "QTBOT_PROMOTION_MIN_TRADES=250",
                         "QTBOT_PROMOTION_MAX_DRAWDOWN=0.20",
@@ -103,6 +108,11 @@ class RuntimeConfigTests(unittest.TestCase):
             self.assertEqual(cfg.conversion_max_median_ape, 0.02)
             self.assertEqual(cfg.combined_max_gap_count, 1)
             self.assertEqual(cfg.combined_min_coverage, 0.98)
+            self.assertEqual(cfg.label_horizon_bars, 4)
+            self.assertEqual(cfg.backtest_initial_capital_cad, 25000.0)
+            self.assertEqual(cfg.backtest_max_active_positions, 5)
+            self.assertEqual(cfg.backtest_position_fraction, 0.2)
+            self.assertEqual(cfg.backtest_slippage_pct_per_side, 0.0005)
             self.assertEqual(cfg.promotion_min_folds, 10)
             self.assertEqual(cfg.promotion_min_trades, 250)
             self.assertEqual(cfg.promotion_max_drawdown, 0.20)

@@ -127,11 +127,14 @@ Phase 6 training rule:
 - `weighted_combined` is the required training scenario for every built fold
 - `ndax_only` is a benchmark scenario and may be partial/skipped when requested folds do not have enough NDAX-only train/validate supervision
 - skipped NDAX benchmark folds must be recorded deterministically in run metadata, not hidden
+- snapshot experiment changes (`label_horizon_bars`, `excluded_symbols`) must be treated as first-class dataset-contract inputs and must be reflected in snapshot manifests + dataset hashes
+- research portfolio backtests must replay persisted predictions deterministically; holding window comes from the snapshot label horizon, and fee/slippage assumptions must remain explicit in the backtest artifact
 
 Phase 7 promotion rule:
 - attribution is a first-class artifact and must remain deterministic for the same evaluated run inputs
-- promotion publishes only the evaluated `primary_scenario` into runtime bundles; alternate scenarios remain research artifacts
+- evaluation `primary_scenario` is research-only; promotion must choose the best scenario that actually clears hard gates at the configured promotion threshold
 - per-coin models may be omitted individually when attribution/gates fail; a passing global model must not be blocked solely by weak per-coin models
+- synthetic conversion gating must use the finalized `synthetic_weights.supervised_eligible` state for the active snapshot symbols; `ndax_only` does not apply the synthetic conversion gate
 - bundle contents must be signed, and active bundle switching is allowed only when paused/stopped and only to a signature-valid bundle
 
 ## 8) When to Ask the User

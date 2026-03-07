@@ -12,6 +12,8 @@ import shutil
 import subprocess
 from typing import Any
 
+import pandas as pd
+
 from qtbot.config import RuntimeConfig
 from qtbot.control import Command, read_control
 from qtbot.model_bundle import (
@@ -28,6 +30,7 @@ from qtbot.training.artifacts import write_json_atomic
 from qtbot.training.attribution import AttributionService
 from qtbot.training.feature_builder import FeatureBuilder
 from qtbot.training.feature_spec import feature_spec_payload
+from qtbot.training.metrics import mean_nullable, metric_row
 from qtbot.training.modeling import (
     build_model_params,
     ensure_binary_labels,
@@ -70,6 +73,13 @@ class ModelStatusSummary:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class _ScenarioEvaluation:
+    scenario: str
+    global_metrics: dict[str, object]
+    hard_failures: list[dict[str, object]]
+
+
 class PromotionService:
     """Promote evaluated training runs into signed deployable bundles."""
 
@@ -92,21 +102,28 @@ class PromotionService:
             raise ValueError(f"training run must be evaluated before promotion: {run_id}")
 
         prior = self._state_store.get_promotion(run_id=run_id)
-        primary_scenario = str(run.get("primary_scenario") or "")
+        bundle_id = ""
+        final_bundle_dir = Path()
+        if prior is not None and str(prior["decision"]) == "accepted":
+            prior_bundle_id = str(prior["bundle_id"])
+            final_bundle_dir = bundle_dir(repo_root=self._repo_root, bundle_id=prior_bundle_id)
+            primary_scenario = str(prior["primary_scenario"])
+        else:
+            primary_scenario = str(run.get("primary_scenario") or "")
         if not primary_scenario:
             raise ValueError(f"training run missing primary scenario: {run_id}")
-
-        bundle_id = _bundle_id(run_id=run_id, primary_scenario=primary_scenario)
-        final_bundle_dir = bundle_dir(repo_root=self._repo_root, bundle_id=bundle_id)
+        if bundle_id is None:
+            bundle_id = _bundle_id(run_id=run_id, primary_scenario=primary_scenario)
+            final_bundle_dir = bundle_dir(repo_root=self._repo_root, bundle_id=bundle_id)
         if prior is not None and str(prior["decision"]) == "accepted" and final_bundle_dir.exists():
             signature_ok, _, _ = validate_bundle_signature(bundle_path=final_bundle_dir)
             if signature_ok:
-                write_active_bundle_id_atomic(repo_root=self._repo_root, bundle_id=bundle_id)
+                write_active_bundle_id_atomic(repo_root=self._repo_root, bundle_id=str(prior["bundle_id"]))
                 return PromotionSummary(
                     run_id=run_id,
-                    bundle_id=bundle_id,
+                    bundle_id=str(prior["bundle_id"]),
                     decision="accepted",
-                    primary_scenario=primary_scenario,
+                    primary_scenario=str(prior["primary_scenario"]),
                     hard_failures=list(prior["hard_failures"]),
                     soft_warnings=list(prior["soft_warnings"]),
                     omitted_symbols=list(prior["omitted_symbols"]),
@@ -114,22 +131,13 @@ class PromotionService:
                     signature_ok=True,
                     status="promoted",
                 )
-        if prior is not None and str(prior["decision"]) == "rejected":
-            return PromotionSummary(
-                run_id=run_id,
-                bundle_id=None,
-                decision="rejected",
-                primary_scenario=primary_scenario,
-                hard_failures=list(prior["hard_failures"]),
-                soft_warnings=list(prior["soft_warnings"]),
-                omitted_symbols=list(prior["omitted_symbols"]),
-                bundle_dir=None,
-                signature_ok=False,
-                status="rejected",
-            )
 
         attribution_summary = self._attribution.generate(run_id=run_id)
         attribution_payload = json.loads(Path(attribution_summary.attribution_json).read_text(encoding="utf-8"))
+        scenario_evaluation = self._select_promotion_scenario(run=run)
+        primary_scenario = scenario_evaluation.scenario
+        bundle_id = _bundle_id(run_id=run_id, primary_scenario=primary_scenario)
+        final_bundle_dir = bundle_dir(repo_root=self._repo_root, bundle_id=bundle_id)
         primary_payload = attribution_payload["scenarios"].get(primary_scenario, {})
         per_coin_payload = primary_payload.get("per_coin", {})
         global_worst = primary_payload.get("global", {}).get("worst_symbols", [])
@@ -150,8 +158,21 @@ class PromotionService:
                     "symbols": [item["symbol"] for item in global_worst[:5]],
                 }
             )
+        alternate_scenarios = []
+        for evaluation in self._evaluate_scenarios(run=run):
+            if evaluation.scenario == primary_scenario:
+                continue
+            alternate_scenarios.append(
+                {
+                    "scenario": evaluation.scenario,
+                    "hard_failure_count": len(evaluation.hard_failures),
+                    "hard_failure_gates": [item["gate"] for item in evaluation.hard_failures],
+                }
+            )
+        if alternate_scenarios:
+            soft_warnings.append({"type": "alternate_scenarios", "items": alternate_scenarios})
 
-        hard_failures = self._hard_failures(run=run, primary_scenario=primary_scenario)
+        hard_failures = list(scenario_evaluation.hard_failures)
         if hard_failures:
             self._state_store.upsert_promotion(
                 run_id=run_id,
@@ -273,12 +294,126 @@ class PromotionService:
         write_active_bundle_id_atomic(repo_root=self._repo_root, bundle_id=bundle_id)
         return self.model_status()
 
-    def _hard_failures(self, *, run: dict[str, object], primary_scenario: str) -> list[dict[str, object]]:
+    def _evaluate_scenarios(self, *, run: dict[str, object]) -> list[_ScenarioEvaluation]:
+        scenario_names = self._scenario_names(run=run)
+        if not scenario_names:
+            return [
+                _ScenarioEvaluation(
+                    scenario=str(run.get("primary_scenario") or ""),
+                    global_metrics={},
+                    hard_failures=[{"gate": "global_metrics_missing", "message": "no evaluated scenarios found"}],
+                )
+            ]
+        snapshot_manifest = self._load_snapshot_manifest(snapshot_id=str(run["snapshot_id"]))
+        snapshot_symbols = {
+            str(item["symbol"])
+            for item in snapshot_manifest.get("symbols", [])
+            if isinstance(item, dict) and item.get("symbol")
+        }
+        evaluations: list[_ScenarioEvaluation] = []
+        for scenario in scenario_names:
+            global_metrics = self._scenario_promotion_metrics(run=run, scenario=scenario)
+            failures = self._hard_failures(
+                run=run,
+                scenario=scenario,
+                global_metrics=global_metrics,
+                snapshot_manifest=snapshot_manifest,
+                snapshot_symbols=snapshot_symbols,
+            )
+            evaluations.append(
+                _ScenarioEvaluation(
+                    scenario=scenario,
+                    global_metrics=global_metrics,
+                    hard_failures=failures,
+                )
+            )
+        return evaluations
+
+    def _select_promotion_scenario(self, *, run: dict[str, object]) -> _ScenarioEvaluation:
+        evaluations = self._evaluate_scenarios(run=run)
+        passing = [item for item in evaluations if not item.hard_failures]
+        candidates = passing or evaluations
+        return max(
+            candidates,
+            key=lambda item: (
+                1 if not item.hard_failures else 0,
+                -len(item.hard_failures),
+                int(item.global_metrics.get("folds") or 0),
+                float(item.global_metrics.get("net_return") or 0.0),
+                float(item.global_metrics.get("pr_auc") or 0.0),
+                item.scenario,
+            ),
+        )
+
+    def _scenario_names(self, *, run: dict[str, object]) -> list[str]:
         metrics_summary = run.get("metrics_summary", {})
-        scenario_metrics = metrics_summary.get(primary_scenario, {}) if isinstance(metrics_summary, dict) else {}
-        global_metrics = scenario_metrics.get("global", {}) if isinstance(scenario_metrics, dict) else {}
+        names = []
+        if isinstance(metrics_summary, dict):
+            names.extend(str(item) for item in metrics_summary.keys())
+        scenario_status = run.get("scenario_status", {})
+        if isinstance(scenario_status, dict):
+            names.extend(str(item) for item in scenario_status.keys())
+        unique = sorted({name for name in names if name})
+        return unique
+
+    def _scenario_promotion_metrics(self, *, run: dict[str, object], scenario: str) -> dict[str, object]:
+        run_dir = Path(str(run["artifact_dir"]))
+        prediction_files = sorted((run_dir / "predictions").rglob(f"{scenario}.parquet"))
+        fold_rows: list[dict[str, object]] = []
+        for file_path in prediction_files:
+            frame = pd.read_parquet(file_path)
+            scope_frame = frame.loc[frame["model_scope"] == "global"]
+            if scope_frame.empty:
+                continue
+            metric_payload = metric_row(
+                frame=scope_frame,
+                fee_pct_per_side=self._config.fee_pct_per_side,
+                trade_threshold=self._config.promotion_entry_threshold,
+            )
+            if metric_payload is None:
+                continue
+            fold_rows.append(
+                {
+                    "fold_index": int(scope_frame["fold_index"].iloc[0]),
+                    **metric_payload,
+                }
+            )
+        if fold_rows:
+            metric_frame = pd.DataFrame(fold_rows)
+            return {
+                "folds": int(metric_frame["fold_index"].nunique()),
+                "row_count": int(metric_frame["row_count"].sum()),
+                "trades": int(metric_frame["trades"].sum()),
+                "gross_return": float(metric_frame["gross_return"].sum()),
+                "net_return": float(metric_frame["net_return"].sum()),
+                "win_rate": mean_nullable(metric_frame["win_rate"]),
+                "max_drawdown": mean_nullable(metric_frame["max_drawdown"]),
+                "logloss": mean_nullable(metric_frame["logloss"]),
+                "roc_auc": mean_nullable(metric_frame["roc_auc"]),
+                "pr_auc": mean_nullable(metric_frame["pr_auc"]),
+                "brier": mean_nullable(metric_frame["brier"]),
+            }
+
+        metrics_summary = run.get("metrics_summary", {})
+        if isinstance(metrics_summary, dict):
+            scenario_payload = metrics_summary.get(scenario, {})
+            if isinstance(scenario_payload, dict):
+                global_payload = scenario_payload.get("global", {})
+                if isinstance(global_payload, dict):
+                    return dict(global_payload)
+        return {}
+
+    def _hard_failures(
+        self,
+        *,
+        run: dict[str, object],
+        scenario: str,
+        global_metrics: dict[str, object],
+        snapshot_manifest: dict[str, object],
+        snapshot_symbols: set[str],
+    ) -> list[dict[str, object]]:
         if not global_metrics:
-            return [{"gate": "global_metrics_missing", "message": "primary scenario global metrics missing"}]
+            return [{"gate": "global_metrics_missing", "message": f"scenario global metrics missing: {scenario}"}]
 
         failures: list[dict[str, object]] = []
         folds = int(global_metrics.get("folds") or 0)
@@ -303,7 +438,6 @@ class PromotionService:
         if stressed <= 0.0:
             failures.append({"gate": "slippage_stress_positive", "observed": stressed, "required": "> 0"})
 
-        snapshot_manifest = self._load_snapshot_manifest(snapshot_id=str(run["snapshot_id"]))
         if not bool(snapshot_manifest.get("parity_check_passed")):
             failures.append({"gate": "snapshot_parity", "observed": False, "required": True})
         for symbol_payload in snapshot_manifest.get("symbols", []):
@@ -328,12 +462,20 @@ class PromotionService:
                 )
                 break
 
-        conversion_quality = self._state_store.get_conversion_quality(timeframe=str(run["timeframe"]))
-        if not conversion_quality:
-            failures.append({"gate": "conversion_pass_rate", "observed": None, "required": self._config.promotion_min_conversion_pass_rate})
-        else:
-            pass_rate = sum(1 for row in conversion_quality if bool(row["quality_pass"])) / len(conversion_quality)
-            if pass_rate < self._config.promotion_min_conversion_pass_rate:
+        if scenario != "ndax_only":
+            pass_rate = self._synthetic_conversion_pass_rate(
+                timeframe=str(run["timeframe"]),
+                snapshot_symbols=snapshot_symbols,
+            )
+            if pass_rate is None:
+                failures.append(
+                    {
+                        "gate": "conversion_pass_rate",
+                        "observed": None,
+                        "required": self._config.promotion_min_conversion_pass_rate,
+                    }
+                )
+            elif pass_rate < self._config.promotion_min_conversion_pass_rate:
                 failures.append(
                     {
                         "gate": "conversion_pass_rate",
@@ -342,6 +484,41 @@ class PromotionService:
                     }
                 )
         return failures
+
+    def _synthetic_conversion_pass_rate(
+        self,
+        *,
+        timeframe: str,
+        snapshot_symbols: set[str],
+    ) -> float | None:
+        weights = self._state_store.get_synthetic_weights(timeframe=timeframe)
+        relevant = [row for row in weights if str(row.get("symbol")) in snapshot_symbols]
+        if relevant:
+            eligible = sum(1 for row in relevant if bool(row.get("supervised_eligible")))
+            return eligible / len(relevant)
+
+        conversion_quality = self._state_store.get_conversion_quality(timeframe=timeframe)
+        deduped: dict[tuple[str, str, str], dict[str, object]] = {}
+        for row in conversion_quality:
+            symbol = str(row.get("symbol") or "")
+            if symbol not in snapshot_symbols:
+                continue
+            overlap_rows = int(row.get("overlap_rows") or 0)
+            if overlap_rows < self._config.min_overlap_rows_for_weight:
+                continue
+            key = (
+                symbol,
+                str(row.get("period_start") or ""),
+                str(row.get("period_end") or ""),
+            )
+            existing = deduped.get(key)
+            updated_at = str(row.get("updated_at_utc") or "")
+            if existing is None or updated_at >= str(existing.get("updated_at_utc") or ""):
+                deduped[key] = row
+        if not deduped:
+            return None
+        passed = sum(1 for row in deduped.values() if bool(row.get("quality_pass")))
+        return passed / len(deduped)
 
     def _publish_bundle(
         self,

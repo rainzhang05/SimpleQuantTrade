@@ -1,0 +1,97 @@
+{
+  "bundle_id": "20260306T104134072859Z_20260306T104000Z_combined_15m_cb509f2066cda990d80938353ebbc073cd0975d92dc1f3e4814f275505e09089_weighted_combined",
+  "code_version": "f91f0ecc99dad16c097c89bd4f7276430331a383",
+  "config_hash": "27ab49ab73f50467616f08773e9525bc30d19558d73097d8f05b642261772b63",
+  "created_at_utc": "2026-03-07T02:50:28+00:00",
+  "dataset_hash": "cb509f2066cda990d80938353ebbc073cd0975d92dc1f3e4814f275505e09089",
+  "feature_spec_hash": "d65052ec3389d20b87955b98a91cdd5bc5f129dd8ce35379c67193e9d6c6ea6d",
+  "included_per_coin_symbols": [],
+  "lgbm_params": {
+    "colsample_bytree": 1.0,
+    "deterministic": true,
+    "force_col_wise": true,
+    "learning_rate": 0.05,
+    "min_child_samples": 50,
+    "n_estimators": 200,
+    "n_jobs": 1,
+    "num_leaves": 31,
+    "objective": "binary",
+    "random_state": 42,
+    "reg_alpha": 0.0,
+    "reg_lambda": 0.0,
+    "subsample": 1.0,
+    "verbosity": -1
+  },
+  "metrics_summary": {
+    "weighted_combined": {
+      "global": {
+        "brier": 0.09299701078668933,
+        "folds": 12,
+        "gross_return": 8.352427498544477,
+        "logloss": 0.31557976558055434,
+        "max_drawdown": 0.32609745438665816,
+        "net_return": 1.6164274985444749,
+        "pr_auc": 0.2390599700628545,
+        "roc_auc": 0.718469949490281,
+        "row_count": 874056,
+        "trades": 1684,
+        "win_rate": 0.49074712633956113
+      },
+      "per_coin": {
+        "brier": 0.09486213561221961,
+        "folds": 12,
+        "gross_return": 23.35810965091843,
+        "logloss": 0.32424635818619446,
+        "max_drawdown": 0.7247690873509258,
+        "net_return": -3.765890349081576,
+        "pr_auc": 0.22175502613839707,
+        "roc_auc": 0.7013641050649215,
+        "row_count": 874056,
+        "trades": 6781,
+        "win_rate": 0.3891039287867272
+      }
+    }
+  },
+  "omitted_symbols": [
+    "AAVECAD",
+    "ADACAD",
+    "ALGOCAD",
+    "APTCAD",
+    "ARBCAD",
+    "ATOMCAD",
+    "AVAXCAD",
+    "BTCCAD",
+    "DOGECAD",
+    "DOTCAD",
+    "ETHCAD",
+    "FETCAD",
+    "FILCAD",
+    "HBARCAD",
+    "ICPCAD",
+    "INJCAD",
+    "LINKCAD",
+    "LTCCAD",
+    "NEARCAD",
+    "OPCAD",
+    "SEICAD",
+    "SOLCAD",
+    "SUICAD",
+    "TONCAD",
+    "UNICAD",
+    "XLMCAD",
+    "XRPCAD"
+  ],
+  "primary_scenario": "weighted_combined",
+  "run_id": "20260306T104134072859Z_20260306T104000Z_combined_15m_cb509f2066cda990d80938353ebbc073cd0975d92dc1f3e4814f275505e09089",
+  "training_window": {
+    "snapshot_id": "20260306T104000Z_combined_15m_cb509f2066cda990d80938353ebbc073cd0975d92dc1f3e4814f275505e09089",
+    "timeframe": "15m"
+  },
+  "walk_forward": {
+    "folds_built": 12,
+    "folds_requested": 12,
+    "train_step_months": 1,
+    "train_window_months": 12,
+    "valid_window_months": 1
+  }
+}

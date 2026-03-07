@@ -96,7 +96,9 @@ class SnapshotBuildSummary:
     dataset: str
     timeframe: str
     interval_seconds: int
+    label_horizon_bars: int
     label_threshold_return: float
+    excluded_symbols: list[str]
     dataset_hash: str
     snapshot_dir: str
     manifest_file: str
@@ -126,7 +128,9 @@ class SnapshotBuildSummary:
             "dataset": self.dataset,
             "timeframe": self.timeframe,
             "interval_seconds": self.interval_seconds,
+            "label_horizon_bars": self.label_horizon_bars,
             "label_threshold_return": self.label_threshold_return,
+            "excluded_symbols": list(self.excluded_symbols),
             "dataset_hash": self.dataset_hash,
             "snapshot_dir": self.snapshot_dir,
             "manifest_file": self.manifest_file,
@@ -180,12 +184,18 @@ class TrainingSnapshotService:
         *,
         asof: datetime,
         timeframe: str,
+        label_horizon_bars: int | None = None,
+        exclude_symbols: set[str] | None = None,
     ) -> SnapshotBuildSummary:
         asof_utc = _as_utc(asof)
         interval_seconds = parse_timeframe_seconds(timeframe)
         dataset = self._config.dataset_mode.strip().lower()
         if dataset not in {"ndax", "combined"}:
             raise ValueError("build-snapshot supports dataset modes: ndax, combined")
+        effective_horizon = int(label_horizon_bars or self._config.label_horizon_bars)
+        if effective_horizon <= 0:
+            raise ValueError("label_horizon_bars must be > 0")
+        excluded_symbols = {item.strip().upper() for item in (exclude_symbols or set()) if item.strip()}
 
         closed_cutoff_ms = _closed_cutoff_ms(asof_utc=asof_utc, interval_seconds=interval_seconds)
         if closed_cutoff_ms <= 0:
@@ -212,10 +222,36 @@ class TrainingSnapshotService:
         continuity_only_row_count = 0
         unlabeled_row_count = 0
         supervised_weight_sum = 0.0
+        hash_digest.update(f"label_horizon_bars={effective_horizon}\n".encode("utf-8"))
+        hash_digest.update(f"excluded_symbols={','.join(sorted(excluded_symbols))}\n".encode("utf-8"))
 
         try:
             for ticker in UNIVERSE_V1_COINS:
                 symbol = f"{ticker}CAD"
+                if symbol in excluded_symbols:
+                    skipped_symbols[symbol] = "excluded_symbol"
+                    symbol_summaries.append(
+                        SnapshotSymbolSummary(
+                            symbol=symbol,
+                            status="excluded",
+                            message="excluded_symbol",
+                            closed_input_rows=0,
+                            snapshot_rows=0,
+                            trainable_rows=0,
+                            continuity_only_rows=0,
+                            unlabeled_rows=0,
+                            source_counts={},
+                            duplicate_count=0,
+                            misaligned_count=0,
+                            gap_count=0,
+                            coverage_pct=0.0,
+                            first_ts=None,
+                            last_ts=None,
+                            parity_ok=True,
+                            file_path="",
+                        )
+                    )
+                    continue
                 symbol_path = self._dataset_symbol_path(
                     dataset=dataset,
                     symbol=symbol,
@@ -300,15 +336,19 @@ class TrainingSnapshotService:
                 for idx, row in enumerate(rows):
                     current_ts = int(row["timestamp_ms"])
                     next_row = rows[idx + 1] if idx + 1 < len(rows) else None
-                    has_next = next_row is not None and int(next_row["timestamp_ms"]) == current_ts + (interval_seconds * 1000)
+                    future_rows = _contiguous_future_rows(
+                        rows=rows,
+                        start_index=idx,
+                        horizon_bars=effective_horizon,
+                        interval_seconds=interval_seconds,
+                    )
+                    has_target = future_rows is not None
                     source = str(row["source"]).strip().lower()
                     synthetic_source = source in {"synthetic", "synthetic_gap_fill"}
-                    next_source = (
-                        str(next_row["source"]).strip().lower()
-                        if next_row is not None
-                        else ""
+                    future_gap_fill = any(
+                        str(item["source"]).strip().lower() == "synthetic_gap_fill"
+                        for item in (future_rows or [])
                     )
-                    next_gap_fill = next_source == "synthetic_gap_fill"
                     if source not in {"ndax", "synthetic", "synthetic_gap_fill"}:
                         raise ValueError(f"{symbol} contains unsupported source value: {source}")
 
@@ -355,11 +395,11 @@ class TrainingSnapshotService:
                         usage["rows_total"] += 1
 
                     row_status = "trainable"
-                    label_available = has_next
-                    if not has_next:
-                        row_status = "unlabeled_missing_next"
+                    label_available = has_target
+                    if not has_target:
+                        row_status = "unlabeled_missing_next" if effective_horizon == 1 else "unlabeled_missing_horizon"
                         label_available = False
-                    elif dataset == "combined" and (source == "synthetic_gap_fill" or next_gap_fill):
+                    elif dataset == "combined" and (source == "synthetic_gap_fill" or future_gap_fill):
                         row_status = "continuity_only"
                         label_available = False
                     elif dataset == "combined" and synthetic_source and not supervised_eligible:
@@ -367,7 +407,8 @@ class TrainingSnapshotService:
                         label_available = False
 
                     next_timestamp_ms = int(next_row["timestamp_ms"]) if next_row is not None else None
-                    next_close = float(next_row["close"]) if label_available and next_row is not None else None
+                    target_row = future_rows[-1] if future_rows else None
+                    next_close = float(target_row["close"]) if label_available and target_row is not None else None
                     forward_return = (
                         (next_close / float(row["close"])) - 1.0
                         if label_available and next_close is not None and float(row["close"]) > 0
@@ -513,7 +554,9 @@ class TrainingSnapshotService:
             "dataset": dataset,
             "timeframe": timeframe,
             "interval_seconds": interval_seconds,
+            "label_horizon_bars": effective_horizon,
             "label_threshold_return": label_threshold,
+            "excluded_symbols": sorted(excluded_symbols),
             "dataset_hash": dataset_hash,
             "snapshot_files": {
                 "manifest": "manifest.json",
@@ -566,7 +609,9 @@ class TrainingSnapshotService:
             dataset=dataset,
             timeframe=timeframe,
             interval_seconds=interval_seconds,
+            label_horizon_bars=effective_horizon,
             label_threshold_return=label_threshold,
+            excluded_symbols=sorted(excluded_symbols),
             dataset_hash=dataset_hash,
             snapshot_dir=str(final_dir),
             manifest_file=str(final_manifest),
@@ -778,6 +823,30 @@ def _count_gaps(*, timestamps: list[int], interval_seconds: int) -> int:
             continue
         gaps += max(0, diff // expected_step - 1)
     return gaps
+
+
+def _contiguous_future_rows(
+    *,
+    rows: list[dict[str, Any]],
+    start_index: int,
+    horizon_bars: int,
+    interval_seconds: int,
+) -> list[dict[str, Any]] | None:
+    if horizon_bars <= 0:
+        raise ValueError("horizon_bars must be > 0")
+    end_index = start_index + horizon_bars
+    if end_index >= len(rows):
+        return None
+    current_ts = int(rows[start_index]["timestamp_ms"])
+    expected_step = interval_seconds * 1000
+    window: list[dict[str, Any]] = []
+    for step in range(1, horizon_bars + 1):
+        item = rows[start_index + step]
+        expected_ts = current_ts + (step * expected_step)
+        if int(item["timestamp_ms"]) != expected_ts:
+            return None
+        window.append(item)
+    return window
 
 
 def _coverage_pct_from_span(*, first_ts: int, last_ts: int, row_count: int, interval_seconds: int) -> float:

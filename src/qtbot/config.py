@@ -64,11 +64,16 @@ class RuntimeConfig:
     conversion_max_median_ape: float
     combined_max_gap_count: int
     combined_min_coverage: float
+    label_horizon_bars: int
     train_seed: int
     train_window_months: int
     valid_window_months: int
     train_step_months: int
     fee_pct_per_side: float
+    backtest_initial_capital_cad: float
+    backtest_max_active_positions: int
+    backtest_position_fraction: float
+    backtest_slippage_pct_per_side: float
     promotion_min_folds: int
     promotion_min_trades: int
     promotion_max_drawdown: float
@@ -243,6 +248,10 @@ def load_runtime_config() -> RuntimeConfig:
     if not (0 < combined_min_coverage <= 1):
         raise ValueError("QTBOT_COMBINED_MIN_COVERAGE must be in (0,1].")
 
+    label_horizon_bars = int(os.getenv("QTBOT_LABEL_HORIZON_BARS", "1"))
+    if label_horizon_bars <= 0:
+        raise ValueError("QTBOT_LABEL_HORIZON_BARS must be > 0.")
+
     train_seed = int(os.getenv("QTBOT_TRAIN_SEED", "42"))
 
     train_window_months = int(os.getenv("QTBOT_TRAIN_WINDOW_MONTHS", "12"))
@@ -258,6 +267,22 @@ def load_runtime_config() -> RuntimeConfig:
     fee_pct_per_side = float(os.getenv("QTBOT_FEE_PCT_PER_SIDE", str(taker_fee_rate)))
     if not (0 <= fee_pct_per_side < 1):
         raise ValueError("QTBOT_FEE_PCT_PER_SIDE must be in [0,1).")
+
+    backtest_initial_capital_cad = float(os.getenv("QTBOT_BACKTEST_INITIAL_CAPITAL_CAD", "10000"))
+    if backtest_initial_capital_cad <= 0:
+        raise ValueError("QTBOT_BACKTEST_INITIAL_CAPITAL_CAD must be > 0.")
+
+    backtest_max_active_positions = int(os.getenv("QTBOT_BACKTEST_MAX_ACTIVE_POSITIONS", "3"))
+    if backtest_max_active_positions <= 0:
+        raise ValueError("QTBOT_BACKTEST_MAX_ACTIVE_POSITIONS must be > 0.")
+
+    backtest_position_fraction = float(os.getenv("QTBOT_BACKTEST_POSITION_FRACTION", "0.25"))
+    if not (0 < backtest_position_fraction <= 1):
+        raise ValueError("QTBOT_BACKTEST_POSITION_FRACTION must be in (0,1].")
+
+    backtest_slippage_pct_per_side = float(os.getenv("QTBOT_BACKTEST_SLIPPAGE_PCT_PER_SIDE", "0.0"))
+    if not (0 <= backtest_slippage_pct_per_side < 1):
+        raise ValueError("QTBOT_BACKTEST_SLIPPAGE_PCT_PER_SIDE must be in [0,1).")
 
     promotion_min_folds = int(os.getenv("QTBOT_PROMOTION_MIN_FOLDS", "12"))
     if promotion_min_folds <= 0:
@@ -339,11 +364,16 @@ def load_runtime_config() -> RuntimeConfig:
         conversion_max_median_ape=conversion_max_median_ape,
         combined_max_gap_count=combined_max_gap_count,
         combined_min_coverage=combined_min_coverage,
+        label_horizon_bars=label_horizon_bars,
         train_seed=train_seed,
         train_window_months=train_window_months,
         valid_window_months=valid_window_months,
         train_step_months=train_step_months,
         fee_pct_per_side=fee_pct_per_side,
+        backtest_initial_capital_cad=backtest_initial_capital_cad,
+        backtest_max_active_positions=backtest_max_active_positions,
+        backtest_position_fraction=backtest_position_fraction,
+        backtest_slippage_pct_per_side=backtest_slippage_pct_per_side,
         promotion_min_folds=promotion_min_folds,
         promotion_min_trades=promotion_min_trades,
         promotion_max_drawdown=promotion_max_drawdown,

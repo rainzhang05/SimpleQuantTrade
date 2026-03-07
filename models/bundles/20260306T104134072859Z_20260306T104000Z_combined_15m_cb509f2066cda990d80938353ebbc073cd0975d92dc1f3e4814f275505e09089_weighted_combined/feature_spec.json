@@ -1,0 +1,286 @@
+{
+  "feature_count": 56,
+  "features": [
+    {
+      "description": "Combined close return over 1 bar.",
+      "family": "combined",
+      "name": "combined_ret_1"
+    },
+    {
+      "description": "Combined close return over 4 bars.",
+      "family": "combined",
+      "name": "combined_ret_4"
+    },
+    {
+      "description": "Combined close return over 16 bars.",
+      "family": "combined",
+      "name": "combined_ret_16"
+    },
+    {
+      "description": "Combined close return over 48 bars.",
+      "family": "combined",
+      "name": "combined_ret_48"
+    },
+    {
+      "description": "Combined close return over 96 bars.",
+      "family": "combined",
+      "name": "combined_ret_96"
+    },
+    {
+      "description": "Combined close relative to 4-bar mean.",
+      "family": "combined",
+      "name": "combined_trend_4"
+    },
+    {
+      "description": "Combined close relative to 16-bar mean.",
+      "family": "combined",
+      "name": "combined_trend_16"
+    },
+    {
+      "description": "Combined close relative to 48-bar mean.",
+      "family": "combined",
+      "name": "combined_trend_48"
+    },
+    {
+      "description": "Combined close relative to 96-bar mean.",
+      "family": "combined",
+      "name": "combined_trend_96"
+    },
+    {
+      "description": "Combined return volatility over 4 bars.",
+      "family": "combined",
+      "name": "combined_vol_4"
+    },
+    {
+      "description": "Combined return volatility over 16 bars.",
+      "family": "combined",
+      "name": "combined_vol_16"
+    },
+    {
+      "description": "Combined return volatility over 48 bars.",
+      "family": "combined",
+      "name": "combined_vol_48"
+    },
+    {
+      "description": "Combined return volatility over 96 bars.",
+      "family": "combined",
+      "name": "combined_vol_96"
+    },
+    {
+      "description": "Volume relative to 4-bar mean.",
+      "family": "combined",
+      "name": "volume_ratio_4"
+    },
+    {
+      "description": "Volume relative to 16-bar mean.",
+      "family": "combined",
+      "name": "volume_ratio_16"
+    },
+    {
+      "description": "Volume relative to 48-bar mean.",
+      "family": "combined",
+      "name": "volume_ratio_48"
+    },
+    {
+      "description": "Volume relative to 96-bar mean.",
+      "family": "combined",
+      "name": "volume_ratio_96"
+    },
+    {
+      "description": "EMA ratio 8 over 32 bars.",
+      "family": "combined",
+      "name": "ema_ratio_8_32"
+    },
+    {
+      "description": "EMA ratio 16 over 64 bars.",
+      "family": "combined",
+      "name": "ema_ratio_16_64"
+    },
+    {
+      "description": "EMA ratio 32 over 128 bars.",
+      "family": "combined",
+      "name": "ema_ratio_32_128"
+    },
+    {
+      "description": "RSI over 14 bars.",
+      "family": "combined",
+      "name": "rsi_14"
+    },
+    {
+      "description": "RSI over 28 bars.",
+      "family": "combined",
+      "name": "rsi_28"
+    },
+    {
+      "description": "Distance to 16-bar mean.",
+      "family": "combined",
+      "name": "dist_mean_16"
+    },
+    {
+      "description": "Distance to 48-bar mean.",
+      "family": "combined",
+      "name": "dist_mean_48"
+    },
+    {
+      "description": "Distance to 96-bar mean.",
+      "family": "combined",
+      "name": "dist_mean_96"
+    },
+    {
+      "description": "Close z-score over 16 bars.",
+      "family": "combined",
+      "name": "zscore_16"
+    },
+    {
+      "description": "Close z-score over 48 bars.",
+      "family": "combined",
+      "name": "zscore_48"
+    },
+    {
+      "description": "Close z-score over 96 bars.",
+      "family": "combined",
+      "name": "zscore_96"
+    },
+    {
+      "description": "Current row source flag for NDAX.",
+      "family": "source",
+      "name": "is_ndax"
+    },
+    {
+      "description": "Current row source flag for synthetic normalized external data.",
+      "family": "source",
+      "name": "is_synthetic"
+    },
+    {
+      "description": "Current row source flag for synthetic gap fill.",
+      "family": "source",
+      "name": "is_synthetic_gap_fill"
+    },
+    {
+      "description": "Effective monthly synthetic row weight.",
+      "family": "source",
+      "name": "effective_monthly_weight"
+    },
+    {
+      "description": "Effective supervised row weight used in training.",
+      "family": "source",
+      "name": "supervised_row_weight_feature"
+    },
+    {
+      "description": "Synthetic share over the last 16 bars.",
+      "family": "source",
+      "name": "synthetic_share_16"
+    },
+    {
+      "description": "Synthetic share over the last 48 bars.",
+      "family": "source",
+      "name": "synthetic_share_48"
+    },
+    {
+      "description": "Synthetic share over the last 96 bars.",
+      "family": "source",
+      "name": "synthetic_share_96"
+    },
+    {
+      "description": "Synthetic gap-fill count over the last 16 bars.",
+      "family": "source",
+      "name": "gap_fill_count_16"
+    },
+    {
+      "description": "Synthetic gap-fill count over the last 48 bars.",
+      "family": "source",
+      "name": "gap_fill_count_48"
+    },
+    {
+      "description": "Synthetic gap-fill count over the last 96 bars.",
+      "family": "source",
+      "name": "gap_fill_count_96"
+    },
+    {
+      "description": "Selected external-source close return over 1 bar.",
+      "family": "raw_external",
+      "name": "external_ret_1"
+    },
+    {
+      "description": "Selected external-source close return over 4 bars.",
+      "family": "raw_external",
+      "name": "external_ret_4"
+    },
+    {
+      "description": "Selected external-source close return over 16 bars.",
+      "family": "raw_external",
+      "name": "external_ret_16"
+    },
+    {
+      "description": "Selected external-source absolute 1-bar return.",
+      "family": "raw_external",
+      "name": "external_vol_1"
+    },
+    {
+      "description": "Selected external-source return volatility over 4 bars.",
+      "family": "raw_external",
+      "name": "external_vol_4"
+    },
+    {
+      "description": "Selected external-source return volatility over 16 bars.",
+      "family": "raw_external",
+      "name": "external_vol_16"
+    },
+    {
+      "description": "Raw NDAX close return over 1 bar.",
+      "family": "raw_ndax",
+      "name": "ndax_ret_1"
+    },
+    {
+      "description": "Raw NDAX close return over 4 bars.",
+      "family": "raw_ndax",
+      "name": "ndax_ret_4"
+    },
+    {
+      "description": "Raw NDAX close return over 16 bars.",
+      "family": "raw_ndax",
+      "name": "ndax_ret_16"
+    },
+    {
+      "description": "NDAX availability flag at the current bar.",
+      "family": "raw_ndax",
+      "name": "ndax_present_1"
+    },
+    {
+      "description": "NDAX availability share over 4 bars.",
+      "family": "raw_ndax",
+      "name": "ndax_present_4"
+    },
+    {
+      "description": "NDAX availability share over 16 bars.",
+      "family": "raw_ndax",
+      "name": "ndax_present_16"
+    },
+    {
+      "description": "Observed NDAX/external close basis ratio.",
+      "family": "basis",
+      "name": "basis_level"
+    },
+    {
+      "description": "Basis z-score over 96 bars.",
+      "family": "basis",
+      "name": "basis_zscore_96"
+    },
+    {
+      "description": "Selected external-source context available at current bar.",
+      "family": "availability",
+      "name": "external_ctx_available"
+    },
+    {
+      "description": "Raw NDAX context available at current bar.",
+      "family": "availability",
+      "name": "ndax_ctx_available"
+    },
+    {
+      "description": "Observed basis available at current bar.",
+      "family": "availability",
+      "name": "basis_available"
+    }
+  ],
+  "version": "training_feature_spec_v2"
+}

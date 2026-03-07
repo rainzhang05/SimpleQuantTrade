@@ -175,11 +175,17 @@ class CliTests(unittest.TestCase):
                 "2026-03-05T12:00:00Z",
                 "--timeframe",
                 "15m",
+                "--label-horizon-bars",
+                "4",
+                "--exclude-symbols",
+                "btc,ethcad",
             ]
         )
         self.assertEqual(args.command, "build-snapshot")
         self.assertEqual(args.asof, "2026-03-05T12:00:00Z")
         self.assertEqual(args.timeframe, "15m")
+        self.assertEqual(args.label_horizon_bars, 4)
+        self.assertEqual(args.exclude_symbols, "btc,ethcad")
 
     def test_parser_accepts_train_flags(self) -> None:
         parser = build_parser()
@@ -210,6 +216,39 @@ class CliTests(unittest.TestCase):
         )
         self.assertEqual(args.command, "eval")
         self.assertEqual(args.run, "20260305T120000Z_run")
+
+    def test_parser_accepts_backtest_flags(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(
+            [
+                "backtest",
+                "--run",
+                "run123",
+                "--scenario",
+                "weighted_combined",
+                "--model-scope",
+                "per_coin",
+                "--entry-threshold",
+                "0.65",
+                "--initial-capital",
+                "25000",
+                "--max-active-positions",
+                "5",
+                "--position-fraction",
+                "0.2",
+                "--slippage-pct-per-side",
+                "0.0005",
+            ]
+        )
+        self.assertEqual(args.command, "backtest")
+        self.assertEqual(args.run, "run123")
+        self.assertEqual(args.scenario, "weighted_combined")
+        self.assertEqual(args.model_scope, "per_coin")
+        self.assertEqual(args.entry_threshold, 0.65)
+        self.assertEqual(args.initial_capital, 25000.0)
+        self.assertEqual(args.max_active_positions, 5)
+        self.assertEqual(args.position_fraction, 0.2)
+        self.assertEqual(args.slippage_pct_per_side, 0.0005)
 
     def test_parser_accepts_attribution_flags(self) -> None:
         parser = build_parser()

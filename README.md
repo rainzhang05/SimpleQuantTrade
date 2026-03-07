@@ -37,9 +37,10 @@ Authoritative docs:
 - `qtbot data-build-combined --from YYYY-MM-DD --to YYYY-MM-DD --timeframe 15m`
 - `qtbot data-calibrate-weights --from YYYY-MM-DD --to YYYY-MM-DD --timeframe 15m --refresh monthly`
 - `qtbot data-weight-status --timeframe 15m`
-- `qtbot build-snapshot --asof <ISO_TIME> --timeframe 15m`
+- `qtbot build-snapshot --asof <ISO_TIME> --timeframe 15m [--label-horizon-bars N] [--exclude-symbols BTC,ETHCAD,...]`
 - `qtbot train --snapshot <SNAPSHOT_ID> --folds <N> --universe V1`
 - `qtbot eval --run <RUN_ID>`
+- `qtbot backtest --run <RUN_ID>`
 - `qtbot attribution --run <RUN_ID>`
 - `qtbot promote --run <RUN_ID>`
 - `qtbot model-status`
@@ -131,6 +132,12 @@ Calibration report output:
 PYTHONPATH=src python3 -m qtbot build-snapshot --asof "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --timeframe 15m
 ```
 
+Optional experiment knobs:
+```bash
+PYTHONPATH=src python3 -m qtbot build-snapshot --asof "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --timeframe 15m --label-horizon-bars 4
+PYTHONPATH=src python3 -m qtbot build-snapshot --asof "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --timeframe 15m --exclude-symbols BTC,ETHCAD
+```
+
 Snapshot output:
 - `data/snapshots/<SNAPSHOT_ID>/manifest.json`
 - `data/snapshots/<SNAPSHOT_ID>/rows.parquet`
@@ -142,11 +149,13 @@ Snapshot supervision notes:
 - direct-quality months use `eligibility_mode=direct`.
 - zero-overlap months before the first same-symbol anchor use `eligibility_mode=carry_backward`.
 - zero-overlap months after an established anchor use `eligibility_mode=carry_forward`.
+- snapshot manifests record `label_horizon_bars` and `excluded_symbols`; both are part of the deterministic dataset hash.
 
 ### Step 6: Train and evaluate walk-forward models
 ```bash
 PYTHONPATH=src python3 -m qtbot train --snapshot <SNAPSHOT_ID> --folds 12 --universe V1
 PYTHONPATH=src python3 -m qtbot eval --run <RUN_ID>
+PYTHONPATH=src python3 -m qtbot backtest --run <RUN_ID>
 ```
 
 ### Step 7: Generate attribution and promote a signed bundle
@@ -174,6 +183,8 @@ Training artifacts:
 - `runtime/research/training/<RUN_ID>/metrics.json`
 - `runtime/research/training/<RUN_ID>/coin_attribution.json`
 - `runtime/research/training/<RUN_ID>/coin_attribution.md`
+- `runtime/research/training/<RUN_ID>/backtests/<BACKTEST_ID>/summary.json`
+- `runtime/research/training/<RUN_ID>/backtests/<BACKTEST_ID>/trades.parquet`
 - `runtime/research/training/<RUN_ID>/predictions/fold_<NN>/<scenario>.parquet`
 - `runtime/research/training/<RUN_ID>/models/global/<scenario>/fold_<NN>.txt`
 - `runtime/research/training/<RUN_ID>/models/per_coin/<SYMBOL>/<scenario>/fold_<NN>.txt`
@@ -182,10 +193,13 @@ Scenario behavior:
 - `weighted_combined` is the required Phase 6 training scenario and must train for every built fold.
 - `ndax_only` is a benchmark scenario; folds with insufficient NDAX train/validate rows or missing classes are skipped and recorded in `manifest.json` / `training_runs.scenario_status`.
 - `eval` reports metrics for whichever scenarios produced persisted prediction files.
+- `backtest` replays persisted validation predictions as a cash-constrained long-only portfolio using the snapshot label horizon, one open position per symbol, capped concurrent positions, and configurable fee/slippage assumptions.
 
 Phase 7 promotion behavior:
 - `attribution` classifies weak per-coin models deterministically as `sparse_history`, `cost_fragility`, `synthetic_fragility`, or `weak_signal`.
-- `promote` evaluates only the run’s `primary_scenario`.
+- `eval` still records a research `primary_scenario`, but `promote` chooses the best scenario that actually passes bundle gates.
+- promotion hard-gate trade metrics are recomputed at `QTBOT_PROMOTION_ENTRY_THRESHOLD`, not the evaluator’s default `0.50` threshold.
+- synthetic conversion quality for promotion is evaluated from the current `synthetic_weights.supervised_eligible` state for the active snapshot symbols.
 - a passing global model can publish a bundle even when some per-coin models are omitted.
 - published bundle models are refit on all trainable rows allowed by the promoted scenario, not copied from one walk-forward fold.
 
@@ -215,6 +229,7 @@ Implemented Phase 7 commands:
 - `qtbot build-snapshot --asof <ISO_TIME>`
 - `qtbot train --snapshot <SNAPSHOT_ID> --folds <N> --universe V1`
 - `qtbot eval --run <RUN_ID>`
+- `qtbot backtest --run <RUN_ID>`
 - `qtbot attribution --run <RUN_ID>`
 - `qtbot promote --run <RUN_ID>`
 - `qtbot model-status`

@@ -213,6 +213,17 @@ def build_parser() -> argparse.ArgumentParser:
         default="15m",
         help="Timeframe alias (currently supports 15m).",
     )
+    build_snapshot_parser.add_argument(
+        "--label-horizon-bars",
+        type=int,
+        default=None,
+        help="Optional label horizon in closed 15m bars; defaults to QTBOT_LABEL_HORIZON_BARS.",
+    )
+    build_snapshot_parser.add_argument(
+        "--exclude-symbols",
+        default="",
+        help="Optional comma-separated tickers or CAD symbols to exclude from the snapshot experiment.",
+    )
 
     train_parser = subparsers.add_parser(
         "train",
@@ -243,6 +254,56 @@ def build_parser() -> argparse.ArgumentParser:
         "--run",
         required=True,
         help="Training run ID under runtime/research/training/.",
+    )
+
+    backtest_parser = subparsers.add_parser(
+        "backtest",
+        help="Run a portfolio-style backtest over persisted validation predictions.",
+    )
+    backtest_parser.add_argument(
+        "--run",
+        required=True,
+        help="Training run ID under runtime/research/training/.",
+    )
+    backtest_parser.add_argument(
+        "--scenario",
+        default=None,
+        help="Optional scenario override; defaults to promoted scenario when available, else run primary scenario.",
+    )
+    backtest_parser.add_argument(
+        "--model-scope",
+        default="global",
+        help="Prediction scope to backtest: global|per_coin.",
+    )
+    backtest_parser.add_argument(
+        "--entry-threshold",
+        type=float,
+        default=None,
+        help="Optional probability threshold; defaults to QTBOT_PROMOTION_ENTRY_THRESHOLD.",
+    )
+    backtest_parser.add_argument(
+        "--initial-capital",
+        type=positive_float,
+        default=None,
+        help="Optional initial capital in CAD; defaults to QTBOT_BACKTEST_INITIAL_CAPITAL_CAD.",
+    )
+    backtest_parser.add_argument(
+        "--max-active-positions",
+        type=int,
+        default=None,
+        help="Optional max concurrent positions; defaults to QTBOT_BACKTEST_MAX_ACTIVE_POSITIONS.",
+    )
+    backtest_parser.add_argument(
+        "--position-fraction",
+        type=positive_float,
+        default=None,
+        help="Optional equity fraction per new position; defaults to QTBOT_BACKTEST_POSITION_FRACTION.",
+    )
+    backtest_parser.add_argument(
+        "--slippage-pct-per-side",
+        type=float,
+        default=None,
+        help="Optional slippage stress per side; defaults to QTBOT_BACKTEST_SLIPPAGE_PCT_PER_SIDE.",
     )
 
     attribution_parser = subparsers.add_parser(
@@ -426,6 +487,8 @@ def main(argv: list[str] | None = None) -> int:
             config=config,
             asof=args.asof,
             timeframe=args.timeframe,
+            label_horizon_bars=args.label_horizon_bars,
+            exclude_symbols=args.exclude_symbols,
         )
     if command == "train":
         return _handle_train(
@@ -438,6 +501,18 @@ def main(argv: list[str] | None = None) -> int:
         return _handle_eval(
             config=config,
             run_id=args.run,
+        )
+    if command == "backtest":
+        return _handle_backtest(
+            config=config,
+            run_id=args.run,
+            scenario=args.scenario,
+            model_scope=args.model_scope,
+            entry_threshold=args.entry_threshold,
+            initial_capital_cad=args.initial_capital,
+            max_active_positions=args.max_active_positions,
+            position_fraction=args.position_fraction,
+            slippage_pct_per_side=args.slippage_pct_per_side,
         )
     if command == "attribution":
         return _handle_attribution(
@@ -846,6 +921,8 @@ def _handle_build_snapshot(
     config: RuntimeConfig,
     asof: str,
     timeframe: str,
+    label_horizon_bars: int | None = None,
+    exclude_symbols: str = "",
 ) -> int:
     try:
         parsed_asof = _parse_datetime_utc(asof)
@@ -853,6 +930,8 @@ def _handle_build_snapshot(
         summary = service.build_snapshot(
             asof=parsed_asof,
             timeframe=timeframe,
+            label_horizon_bars=label_horizon_bars,
+            exclude_symbols=_parse_symbol_exclusions(exclude_symbols),
         )
     except ValueError as exc:
         print(f"Snapshot build failed: {exc}", file=sys.stderr)
@@ -894,6 +973,38 @@ def _handle_eval(
         summary = service.evaluate(run_id=run_id)
     except ValueError as exc:
         print(f"Evaluation failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(json.dumps(summary.to_payload(), indent=2, sort_keys=True))
+    return 0
+
+
+def _handle_backtest(
+    *,
+    config: RuntimeConfig,
+    run_id: str,
+    scenario: str | None,
+    model_scope: str,
+    entry_threshold: float | None,
+    initial_capital_cad: float | None,
+    max_active_positions: int | None,
+    position_fraction: float | None,
+    slippage_pct_per_side: float | None,
+) -> int:
+    try:
+        service = _make_backtest_service(config)
+        summary = service.backtest(
+            run_id=run_id,
+            scenario=scenario,
+            model_scope=model_scope,
+            entry_threshold=entry_threshold,
+            initial_capital_cad=initial_capital_cad,
+            max_active_positions=max_active_positions,
+            position_fraction=position_fraction,
+            slippage_pct_per_side=slippage_pct_per_side,
+        )
+    except ValueError as exc:
+        print(f"Backtest failed: {exc}", file=sys.stderr)
         return 1
 
     print(json.dumps(summary.to_payload(), indent=2, sort_keys=True))
@@ -1091,6 +1202,15 @@ def _make_evaluation_service(config: RuntimeConfig):
     )
 
 
+def _make_backtest_service(config: RuntimeConfig):
+    from qtbot.training import PortfolioBacktestService
+
+    return PortfolioBacktestService(
+        config=config,
+        state_store=StateStore(config.state_db),
+    )
+
+
 def _make_attribution_service(config: RuntimeConfig):
     from qtbot.training import AttributionService
 
@@ -1152,6 +1272,16 @@ def _parse_datetime_utc(raw_value: str) -> datetime:
 
 def _parse_sources_csv(raw_value: str) -> list[str]:
     return [item.strip() for item in raw_value.split(",") if item.strip()]
+
+
+def _parse_symbol_exclusions(raw_value: str) -> set[str]:
+    exclusions: set[str] = set()
+    for item in raw_value.split(","):
+        token = item.strip().upper()
+        if not token:
+            continue
+        exclusions.add(token if token.endswith("CAD") else f"{token}CAD")
+    return exclusions
 
 
 def _find_instrument_by_symbol(instruments: list[dict[str, object]], symbol: str) -> dict[str, object] | None:

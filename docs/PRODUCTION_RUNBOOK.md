@@ -124,6 +124,12 @@ PYTHONPATH=src python3 -m qtbot data-weight-status --timeframe 15m
 PYTHONPATH=src python3 -m qtbot build-snapshot --asof "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --timeframe 15m
 ```
 
+Experiment variants:
+```bash
+PYTHONPATH=src python3 -m qtbot build-snapshot --asof "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --timeframe 15m --label-horizon-bars 4
+PYTHONPATH=src python3 -m qtbot build-snapshot --asof "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --timeframe 15m --exclude-symbols BTC,ETHCAD
+```
+
 Expected outputs:
 - `data/snapshots/<SNAPSHOT_ID>/manifest.json`
 - `data/snapshots/<SNAPSHOT_ID>/rows.parquet`
@@ -133,11 +139,13 @@ Snapshot readiness checks:
 - source mix present in manifest
 - synthetic rows include monthly effective weights
 - `dataset_hash` is stable for repeated runs at the same cutoff
+- `label_horizon_bars` / `excluded_symbols` in the manifest match the intended experiment
 
 ### 3.5 Walk-forward training + evaluation
 ```bash
 PYTHONPATH=src python3 -m qtbot train --snapshot <SNAPSHOT_ID> --folds 12 --universe V1
 PYTHONPATH=src python3 -m qtbot eval --run <RUN_ID>
+PYTHONPATH=src python3 -m qtbot backtest --run <RUN_ID>
 ```
 
 Local wrapper:
@@ -156,6 +164,8 @@ Training readiness checks:
 - `ndax_only` metrics are present only when the requested folds have sufficient NDAX history; skipped folds/scenarios are recorded in `training_runs.scenario_status`
 - repeated `eval --run <RUN_ID>` rewrites identical metrics without duplicate DB rows
 - synthetic supervision may appear as `direct`, `carry_backward`, or `carry_forward`; symbols with no anchor remain continuity-only
+- `backtests/<BACKTEST_ID>/summary.json` exists when portfolio replay has been run
+- portfolio backtest uses the snapshot label horizon as its fixed holding window
 
 ### 3.6 Attribution + bundle promotion
 ```bash
@@ -166,8 +176,10 @@ PYTHONPATH=src python3 -m qtbot model-status
 
 Promotion checks:
 - the run must already be `evaluated`
-- promotion uses the evaluated `primary_scenario`
+- promotion chooses the best scenario that passes hard gates at the configured promotion threshold
 - the global model must pass hard gates
+- hard-gate trade counts/returns are recomputed at `QTBOT_PROMOTION_ENTRY_THRESHOLD`
+- synthetic conversion quality is checked from current `synthetic_weights.supervised_eligible` coverage for snapshot symbols; `ndax_only` promotion skips that gate
 - weak per-coin models may be omitted individually and are recorded in attribution + bundle manifest
 - promoted bundle models are full-snapshot refits, not reused fold models
 
@@ -215,6 +227,7 @@ Training/promotion command flow from the current checkpoint:
 PYTHONPATH=src python3 -m qtbot build-snapshot --asof <ISO_TIME>
 PYTHONPATH=src python3 -m qtbot train --snapshot <SNAPSHOT_ID> --folds 12 --universe V1
 PYTHONPATH=src python3 -m qtbot eval --run <RUN_ID>
+PYTHONPATH=src python3 -m qtbot backtest --run <RUN_ID>
 PYTHONPATH=src python3 -m qtbot attribution --run <RUN_ID>
 PYTHONPATH=src python3 -m qtbot promote --run <RUN_ID>
 PYTHONPATH=src python3 -m qtbot model-status

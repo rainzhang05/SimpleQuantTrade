@@ -39,6 +39,152 @@ def _write_market_rows(path: Path, rows: list[dict[str, object]]) -> None:
 
 
 class SnapshotTests(unittest.TestCase):
+    def test_build_snapshot_supports_multi_bar_label_horizon(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cfg = make_runtime_config(root)
+            store = StateStore(cfg.state_db)
+            service = TrainingSnapshotService(config=cfg, state_store=store)
+
+            combined_dir = root / "data" / "combined" / "15m"
+            _write_market_rows(
+                combined_dir / "BTCCAD.parquet",
+                [
+                    {
+                        "timestamp_ms": _ts_ms(2026, 1, 1, 0, 0),
+                        "open": 100.0,
+                        "high": 101.0,
+                        "low": 99.0,
+                        "close": 100.0,
+                        "volume": 10.0,
+                        "symbol": "BTCCAD",
+                        "source": "ndax",
+                    },
+                    {
+                        "timestamp_ms": _ts_ms(2026, 1, 1, 0, 15),
+                        "open": 101.0,
+                        "high": 102.0,
+                        "low": 100.0,
+                        "close": 101.0,
+                        "volume": 11.0,
+                        "symbol": "BTCCAD",
+                        "source": "ndax",
+                    },
+                    {
+                        "timestamp_ms": _ts_ms(2026, 1, 1, 0, 30),
+                        "open": 102.0,
+                        "high": 103.0,
+                        "low": 101.0,
+                        "close": 102.0,
+                        "volume": 12.0,
+                        "symbol": "BTCCAD",
+                        "source": "ndax",
+                    },
+                    {
+                        "timestamp_ms": _ts_ms(2026, 1, 1, 0, 45),
+                        "open": 103.0,
+                        "high": 104.0,
+                        "low": 102.0,
+                        "close": 103.0,
+                        "volume": 13.0,
+                        "symbol": "BTCCAD",
+                        "source": "ndax",
+                    },
+                ],
+            )
+
+            summary = service.build_snapshot(
+                asof=datetime(2026, 1, 1, 1, 0, tzinfo=timezone.utc),
+                timeframe="15m",
+                label_horizon_bars=2,
+            )
+
+            self.assertEqual(summary.label_horizon_bars, 2)
+            self.assertEqual(summary.row_count, 4)
+            self.assertEqual(summary.trainable_row_count, 2)
+            self.assertEqual(summary.unlabeled_row_count, 2)
+
+            rows = pq.read_table(summary.rows_file).to_pylist()
+            self.assertEqual(rows[0]["row_status"], "trainable")
+            self.assertAlmostEqual(rows[0]["forward_return"], 0.02)
+            self.assertEqual(rows[1]["row_status"], "trainable")
+            self.assertAlmostEqual(rows[1]["forward_return"], (103.0 / 101.0) - 1.0)
+            self.assertEqual(rows[2]["row_status"], "unlabeled_missing_horizon")
+            self.assertEqual(rows[3]["row_status"], "unlabeled_missing_horizon")
+
+    def test_build_snapshot_records_excluded_symbols(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cfg = make_runtime_config(root)
+            store = StateStore(cfg.state_db)
+            service = TrainingSnapshotService(config=cfg, state_store=store)
+
+            combined_dir = root / "data" / "combined" / "15m"
+            _write_market_rows(
+                combined_dir / "BTCCAD.parquet",
+                [
+                    {
+                        "timestamp_ms": _ts_ms(2026, 1, 1, 0, 0),
+                        "open": 100.0,
+                        "high": 101.0,
+                        "low": 99.0,
+                        "close": 100.0,
+                        "volume": 10.0,
+                        "symbol": "BTCCAD",
+                        "source": "ndax",
+                    },
+                    {
+                        "timestamp_ms": _ts_ms(2026, 1, 1, 0, 15),
+                        "open": 101.0,
+                        "high": 102.0,
+                        "low": 100.0,
+                        "close": 101.0,
+                        "volume": 11.0,
+                        "symbol": "BTCCAD",
+                        "source": "ndax",
+                    },
+                ],
+            )
+            _write_market_rows(
+                combined_dir / "ETHCAD.parquet",
+                [
+                    {
+                        "timestamp_ms": _ts_ms(2026, 1, 1, 0, 0),
+                        "open": 50.0,
+                        "high": 51.0,
+                        "low": 49.0,
+                        "close": 50.0,
+                        "volume": 20.0,
+                        "symbol": "ETHCAD",
+                        "source": "ndax",
+                    },
+                    {
+                        "timestamp_ms": _ts_ms(2026, 1, 1, 0, 15),
+                        "open": 51.0,
+                        "high": 52.0,
+                        "low": 50.0,
+                        "close": 51.0,
+                        "volume": 21.0,
+                        "symbol": "ETHCAD",
+                        "source": "ndax",
+                    },
+                ],
+            )
+
+            summary = service.build_snapshot(
+                asof=datetime(2026, 1, 1, 0, 30, tzinfo=timezone.utc),
+                timeframe="15m",
+                exclude_symbols={"ETHCAD"},
+            )
+
+            self.assertEqual(summary.excluded_symbols, ["ETHCAD"])
+            self.assertEqual(summary.skipped_symbols["ETHCAD"], "excluded_symbol")
+            excluded = next(item for item in summary.symbols if item.symbol == "ETHCAD")
+            self.assertEqual(excluded.status, "excluded")
+            self.assertEqual(summary.symbols_included, 1)
+            rows = pq.read_table(summary.rows_file).to_pylist()
+            self.assertEqual({row["symbol"] for row in rows}, {"BTCCAD"})
+
     def test_build_snapshot_applies_weights_and_continuity_only_rows(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

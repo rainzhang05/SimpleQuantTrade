@@ -17,14 +17,19 @@ def iter_splits(frame: pd.DataFrame):
         yield "synthetic", synthetic
 
 
-def metric_row(*, frame: pd.DataFrame, fee_pct_per_side: float) -> dict[str, object] | None:
+def metric_row(
+    *,
+    frame: pd.DataFrame,
+    fee_pct_per_side: float,
+    trade_threshold: float = 0.5,
+) -> dict[str, object] | None:
     if frame.empty:
         return None
     y_true = frame["y"].astype("int32").to_numpy()
     probability = frame["probability"].astype("float64").clip(1e-6, 1.0 - 1e-6).to_numpy()
     forward_return = frame["forward_return"].astype("float64").to_numpy()
 
-    trade_mask = probability >= 0.5
+    trade_mask = probability >= float(trade_threshold)
     traded_returns = forward_return[trade_mask]
     net_trade_returns = traded_returns - (2.0 * fee_pct_per_side)
 

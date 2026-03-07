@@ -1,0 +1,5 @@
+{
+  "fee_pct_per_side": 0.002,
+  "label_threshold_return": 0.004,
+  "slippage_stress_pct_per_side": 0.001
+}

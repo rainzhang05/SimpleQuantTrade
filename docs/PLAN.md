@@ -201,6 +201,10 @@ Active universe note:
   - carry-backward eligibility from nearest qualifying future same-symbol month for pre-overlap history
   - carry-forward eligibility from nearest prior qualifying same-symbol month
   - blocked synthetic rows remain continuity-only
+- research experiment controls:
+  - `build-snapshot --label-horizon-bars <N>`
+  - `build-snapshot --exclude-symbols BTC,ETHCAD,...`
+  - `qtbot backtest --run <RUN_ID>` for cash-constrained portfolio replay over persisted predictions
 
 ### Module boundaries
 - training/eval package (new)
@@ -211,6 +215,8 @@ Active universe note:
 - deterministic model artifacts from fixed seed/snapshot
 - evaluator cost correctness
 - fold-boundary determinism under repeated runs
+- portfolio backtest determinism under fixed predictions/config
+- snapshot experiment determinism for horizon/exclusion variants
 
 ### Acceptance gate
 - end-to-end run creates deterministic fold metrics and source-mix diagnostics.
@@ -229,8 +235,10 @@ Active universe note:
   - `qtbot model-status`
   - `qtbot set-active-bundle <BUNDLE_ID>`
 - deployable bundle models are refit on all trainable rows allowed by the promoted primary scenario.
-- published bundles contain only the promoted primary scenario; alternate scenarios remain research artifacts.
+- published bundles contain only the promoted scenario; alternate scenarios remain research artifacts.
 - per-coin models are promoted independently and may be omitted without blocking a passing global model.
+- evaluation `primary_scenario` remains a research summary, while promotion recomputes gate metrics at `QTBOT_PROMOTION_ENTRY_THRESHOLD` and selects the best scenario that actually clears bundle gates.
+- synthetic conversion pass-rate for promotion is measured from the finalized `synthetic_weights.supervised_eligible` state on active snapshot symbols; `ndax_only` skips the synthetic conversion gate.
 
 ### Hard gate minimums
 - `min_folds=12`

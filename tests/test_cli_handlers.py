@@ -73,6 +73,7 @@ class CliHandlerTests(unittest.TestCase):
                 )
                 h_train = stack.enter_context(mock.patch("qtbot.cli._handle_train", return_value=0))
                 h_eval = stack.enter_context(mock.patch("qtbot.cli._handle_eval", return_value=0))
+                h_backtest = stack.enter_context(mock.patch("qtbot.cli._handle_backtest", return_value=0))
                 h_attribution = stack.enter_context(
                     mock.patch("qtbot.cli._handle_attribution", return_value=0)
                 )
@@ -220,6 +221,9 @@ class CliHandlerTests(unittest.TestCase):
 
                 self.assertEqual(cli.main(["eval", "--run", "run123"]), 0)
                 h_eval.assert_called_once()
+
+                self.assertEqual(cli.main(["backtest", "--run", "run123"]), 0)
+                h_backtest.assert_called_once()
 
                 self.assertEqual(cli.main(["attribution", "--run", "run123"]), 0)
                 h_attribution.assert_called_once()
@@ -610,12 +614,19 @@ class CliHandlerTests(unittest.TestCase):
                     config=cfg,
                     asof="2026-03-05T12:00:00Z",
                     timeframe="15m",
+                    label_horizon_bars=4,
+                    exclude_symbols="btc,ethcad",
                 )
             self.assertEqual(code, 0)
             self.assertEqual(err, "")
             payload = json.loads(out)
             self.assertEqual(payload["row_count"], 42)
-            service.build_snapshot.assert_called_once()
+            service.build_snapshot.assert_called_once_with(
+                asof=mock.ANY,
+                timeframe="15m",
+                label_horizon_bars=4,
+                exclude_symbols={"BTCCAD", "ETHCAD"},
+            )
 
             service.build_snapshot.side_effect = ValueError("bad asof")
             with mock.patch("qtbot.cli._make_snapshot_service", return_value=service):
@@ -624,6 +635,8 @@ class CliHandlerTests(unittest.TestCase):
                     config=cfg,
                     asof="not-a-date",
                     timeframe="15m",
+                    label_horizon_bars=None,
+                    exclude_symbols="",
                 )
             self.assertEqual(code, 1)
             self.assertIn("Snapshot build failed", err)
@@ -697,6 +710,64 @@ class CliHandlerTests(unittest.TestCase):
                 )
             self.assertEqual(code, 1)
             self.assertIn("Evaluation failed", err)
+
+    def test_handle_backtest(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = make_runtime_config(Path(td))
+            summary = mock.Mock()
+            summary.to_payload.return_value = {
+                "run_id": "run123",
+                "scenario": "weighted_combined",
+                "model_scope": "global",
+                "total_return_pct": 12.5,
+                "status": "backtested",
+            }
+            service = mock.Mock()
+            service.backtest.return_value = summary
+            with mock.patch("qtbot.cli._make_backtest_service", return_value=service):
+                code, out, err = _capture_output(
+                    cli._handle_backtest,
+                    config=cfg,
+                    run_id="run123",
+                    scenario="weighted_combined",
+                    model_scope="global",
+                    entry_threshold=0.6,
+                    initial_capital_cad=10000.0,
+                    max_active_positions=3,
+                    position_fraction=0.25,
+                    slippage_pct_per_side=0.0005,
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(err, "")
+            payload = json.loads(out)
+            self.assertEqual(payload["status"], "backtested")
+            service.backtest.assert_called_once_with(
+                run_id="run123",
+                scenario="weighted_combined",
+                model_scope="global",
+                entry_threshold=0.6,
+                initial_capital_cad=10000.0,
+                max_active_positions=3,
+                position_fraction=0.25,
+                slippage_pct_per_side=0.0005,
+            )
+
+            service.backtest.side_effect = ValueError("bad run")
+            with mock.patch("qtbot.cli._make_backtest_service", return_value=service):
+                code, _, err = _capture_output(
+                    cli._handle_backtest,
+                    config=cfg,
+                    run_id="run123",
+                    scenario=None,
+                    model_scope="global",
+                    entry_threshold=None,
+                    initial_capital_cad=None,
+                    max_active_positions=None,
+                    position_fraction=None,
+                    slippage_pct_per_side=None,
+                )
+            self.assertEqual(code, 1)
+            self.assertIn("Backtest failed", err)
 
     def test_handle_attribution(self) -> None:
         with tempfile.TemporaryDirectory() as td:

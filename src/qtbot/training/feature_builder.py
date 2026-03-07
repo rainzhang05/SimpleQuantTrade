@@ -20,6 +20,8 @@ class FeatureBuildSummary:
     dataset_hash: str
     timeframe: str
     interval_seconds: int
+    label_horizon_bars: int
+    excluded_symbols: list[str]
     snapshot_dir: str
     row_count: int
     feature_count: int
@@ -57,9 +59,14 @@ class FeatureBuilder:
         interval_seconds = int(manifest["interval_seconds"])
         timeframe = str(manifest["timeframe"])
 
+        manifest_symbols = [
+            str(item["symbol"])
+            for item in manifest.get("symbols", [])
+            if isinstance(item, dict) and item.get("status") == "ok" and item.get("symbol")
+        ]
         pieces: list[pd.DataFrame] = []
-        for ticker in UNIVERSE_V1_COINS:
-            symbol = f"{ticker}CAD"
+        for symbol in manifest_symbols or [f"{ticker}CAD" for ticker in UNIVERSE_V1_COINS]:
+            ticker = symbol.removesuffix("CAD")
             frame = self._build_symbol_rows(
                 symbol=symbol,
                 ticker=ticker,
@@ -81,6 +88,8 @@ class FeatureBuilder:
             dataset_hash=str(manifest["dataset_hash"]),
             timeframe=timeframe,
             interval_seconds=interval_seconds,
+            label_horizon_bars=int(manifest.get("label_horizon_bars", 1)),
+            excluded_symbols=[str(item) for item in manifest.get("excluded_symbols", [])],
             snapshot_dir=str(snapshot_dir),
             row_count=int(len(data)),
             feature_count=len(FEATURE_COLUMNS),
