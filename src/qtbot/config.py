@@ -69,6 +69,13 @@ class RuntimeConfig:
     valid_window_months: int
     train_step_months: int
     fee_pct_per_side: float
+    promotion_min_folds: int
+    promotion_min_trades: int
+    promotion_max_drawdown: float
+    promotion_min_conversion_pass_rate: float
+    promotion_slippage_stress_pct_per_side: float
+    promotion_entry_threshold: float
+    promotion_exit_threshold: float
 
 
 def load_runtime_config() -> RuntimeConfig:
@@ -252,6 +259,38 @@ def load_runtime_config() -> RuntimeConfig:
     if not (0 <= fee_pct_per_side < 1):
         raise ValueError("QTBOT_FEE_PCT_PER_SIDE must be in [0,1).")
 
+    promotion_min_folds = int(os.getenv("QTBOT_PROMOTION_MIN_FOLDS", "12"))
+    if promotion_min_folds <= 0:
+        raise ValueError("QTBOT_PROMOTION_MIN_FOLDS must be > 0.")
+
+    promotion_min_trades = int(os.getenv("QTBOT_PROMOTION_MIN_TRADES", "200"))
+    if promotion_min_trades <= 0:
+        raise ValueError("QTBOT_PROMOTION_MIN_TRADES must be > 0.")
+
+    promotion_max_drawdown = float(os.getenv("QTBOT_PROMOTION_MAX_DRAWDOWN", "0.25"))
+    if not (0 < promotion_max_drawdown < 1):
+        raise ValueError("QTBOT_PROMOTION_MAX_DRAWDOWN must be in (0,1).")
+
+    promotion_min_conversion_pass_rate = float(
+        os.getenv("QTBOT_PROMOTION_MIN_CONVERSION_PASS_RATE", "0.60")
+    )
+    if not (0 <= promotion_min_conversion_pass_rate <= 1):
+        raise ValueError("QTBOT_PROMOTION_MIN_CONVERSION_PASS_RATE must be in [0,1].")
+
+    promotion_slippage_stress_pct_per_side = float(
+        os.getenv("QTBOT_PROMOTION_SLIPPAGE_STRESS_PCT_PER_SIDE", "0.001")
+    )
+    if not (0 <= promotion_slippage_stress_pct_per_side < 1):
+        raise ValueError("QTBOT_PROMOTION_SLIPPAGE_STRESS_PCT_PER_SIDE must be in [0,1).")
+
+    promotion_entry_threshold = float(os.getenv("QTBOT_PROMOTION_ENTRY_THRESHOLD", "0.60"))
+    if not (0 <= promotion_entry_threshold <= 1):
+        raise ValueError("QTBOT_PROMOTION_ENTRY_THRESHOLD must be in [0,1].")
+
+    promotion_exit_threshold = float(os.getenv("QTBOT_PROMOTION_EXIT_THRESHOLD", "0.48"))
+    if not (0 <= promotion_exit_threshold <= 1):
+        raise ValueError("QTBOT_PROMOTION_EXIT_THRESHOLD must be in [0,1].")
+
     runtime_dir = _resolve_runtime_dir(os.getenv("QTBOT_RUNTIME_DIR", "runtime"))
     return RuntimeConfig(
         cadence_seconds=cadence_seconds,
@@ -305,6 +344,13 @@ def load_runtime_config() -> RuntimeConfig:
         valid_window_months=valid_window_months,
         train_step_months=train_step_months,
         fee_pct_per_side=fee_pct_per_side,
+        promotion_min_folds=promotion_min_folds,
+        promotion_min_trades=promotion_min_trades,
+        promotion_max_drawdown=promotion_max_drawdown,
+        promotion_min_conversion_pass_rate=promotion_min_conversion_pass_rate,
+        promotion_slippage_stress_pct_per_side=promotion_slippage_stress_pct_per_side,
+        promotion_entry_threshold=promotion_entry_threshold,
+        promotion_exit_threshold=promotion_exit_threshold,
     )
 
 

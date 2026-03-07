@@ -40,6 +40,10 @@ Authoritative docs:
 - `qtbot build-snapshot --asof <ISO_TIME> --timeframe 15m`
 - `qtbot train --snapshot <SNAPSHOT_ID> --folds <N> --universe V1`
 - `qtbot eval --run <RUN_ID>`
+- `qtbot attribution --run <RUN_ID>`
+- `qtbot promote --run <RUN_ID>`
+- `qtbot model-status`
+- `qtbot set-active-bundle <BUNDLE_ID>`
 
 Defaults:
 - `data-backfill` defaults to `--sources ndax,kraken,binance`
@@ -73,7 +77,7 @@ PYTHONPATH=src python3 -m qtbot staging-validate --offline-only --budget 1000 --
 PYTHONPATH=src python3 -m qtbot cutover-checklist --offline-only --budget 250 --staging-max-age-hours 168
 ```
 
-## End-to-End Data Workflow (Implemented Through Phase 6)
+## End-to-End Data Workflow (Implemented Through Phase 7)
 
 ### Step 1: Backfill raw NDAX + Kraken + Binance 15m data
 ```bash
@@ -145,6 +149,13 @@ PYTHONPATH=src python3 -m qtbot train --snapshot <SNAPSHOT_ID> --folds 12 --univ
 PYTHONPATH=src python3 -m qtbot eval --run <RUN_ID>
 ```
 
+### Step 7: Generate attribution and promote a signed bundle
+```bash
+PYTHONPATH=src python3 -m qtbot attribution --run <RUN_ID>
+PYTHONPATH=src python3 -m qtbot promote --run <RUN_ID>
+PYTHONPATH=src python3 -m qtbot model-status
+```
+
 Local helper scripts:
 ```bash
 ./scripts/refresh_all_available_data.sh
@@ -161,6 +172,8 @@ Training artifacts:
 - `runtime/research/training/<RUN_ID>/feature_spec.json`
 - `runtime/research/training/<RUN_ID>/folds.json`
 - `runtime/research/training/<RUN_ID>/metrics.json`
+- `runtime/research/training/<RUN_ID>/coin_attribution.json`
+- `runtime/research/training/<RUN_ID>/coin_attribution.md`
 - `runtime/research/training/<RUN_ID>/predictions/fold_<NN>/<scenario>.parquet`
 - `runtime/research/training/<RUN_ID>/models/global/<scenario>/fold_<NN>.txt`
 - `runtime/research/training/<RUN_ID>/models/per_coin/<SYMBOL>/<scenario>/fold_<NN>.txt`
@@ -170,29 +183,45 @@ Scenario behavior:
 - `ndax_only` is a benchmark scenario; folds with insufficient NDAX train/validate rows or missing classes are skipped and recorded in `manifest.json` / `training_runs.scenario_status`.
 - `eval` reports metrics for whichever scenarios produced persisted prediction files.
 
+Phase 7 promotion behavior:
+- `attribution` classifies weak per-coin models deterministically as `sparse_history`, `cost_fragility`, `synthetic_fragility`, or `weak_signal`.
+- `promote` evaluates only the run’s `primary_scenario`.
+- a passing global model can publish a bundle even when some per-coin models are omitted.
+- published bundle models are refit on all trainable rows allowed by the promoted scenario, not copied from one walk-forward fold.
+
+Bundle artifacts:
+- `models/bundles/<BUNDLE_ID>/manifest.json`
+- `models/bundles/<BUNDLE_ID>/global_model.txt`
+- `models/bundles/<BUNDLE_ID>/per_coin/<SYMBOL>.txt`
+- `models/bundles/<BUNDLE_ID>/feature_spec.json`
+- `models/bundles/<BUNDLE_ID>/thresholds.json`
+- `models/bundles/<BUNDLE_ID>/cost_model.json`
+- `models/bundles/<BUNDLE_ID>/signature.sha256`
+- `models/bundles/LATEST`
+
 ## Next Steps to Final Production ML (Current -> Final)
 
 Current program status:
-- Implemented now: multi-source ingestion, combined CAD build, monthly calibration weighting, weighted training snapshot integration, and walk-forward training/evaluation.
-- Next active build phase: promotion gates and model bundle publishing (see `docs/PLAN.md` phases 7-9).
+- Implemented now: multi-source ingestion, combined CAD build, monthly calibration weighting, weighted training snapshot integration, walk-forward training/evaluation, deterministic attribution, and signed bundle promotion.
+- Next active build phase: live ML inference integration (see `docs/PLAN.md` phases 8-9).
 
 Execution sequence:
 1. Keep data current:
-   - rerun `data-backfill`, `data-build-combined`, `data-calibrate-weights`, `build-snapshot`, `train`, and `eval` for the latest cutoff.
-2. Implement promotion gates and model bundle publishing (Phase 7).
-3. Implement live ML inference path with observe-only fallback (Phase 8).
-4. Complete staging/cutover evidence and rollback drill, then enable ML live path (Phase 9).
+   - rerun `data-backfill`, `data-build-combined`, `data-calibrate-weights`, `build-snapshot`, `train`, `eval`, `attribution`, and `promote` for the latest cutoff.
+2. Implement live ML inference path with observe-only fallback (Phase 8).
+3. Complete staging/cutover evidence and rollback drill, then enable ML live path (Phase 9).
 
-Implemented Phase 6 commands:
+Implemented Phase 7 commands:
 - `qtbot build-snapshot --asof <ISO_TIME>`
 - `qtbot train --snapshot <SNAPSHOT_ID> --folds <N> --universe V1`
 - `qtbot eval --run <RUN_ID>`
-
-Planned CLI commands for the remaining phases (not fully implemented yet):
+- `qtbot attribution --run <RUN_ID>`
 - `qtbot promote --run <RUN_ID>`
 - `qtbot model-status`
-- `qtbot predict --symbol <SYM> --at latest`
 - `qtbot set-active-bundle <BUNDLE_ID>`
+
+Planned CLI commands for the remaining phases (not fully implemented yet):
+- `qtbot predict --symbol <SYM> --at latest`
 
 Do not enable ML live trading until all phase gates pass:
 - deterministic snapshot reproducibility
@@ -237,6 +266,13 @@ All `data/` paths below are local-only and ignored by git:
 - `QTBOT_VALID_WINDOW_MONTHS=1`
 - `QTBOT_TRAIN_STEP_MONTHS=1`
 - `QTBOT_FEE_PCT_PER_SIDE` defaults to `QTBOT_TAKER_FEE_RATE`
+- `QTBOT_PROMOTION_MIN_FOLDS=12`
+- `QTBOT_PROMOTION_MIN_TRADES=200`
+- `QTBOT_PROMOTION_MAX_DRAWDOWN=0.25`
+- `QTBOT_PROMOTION_MIN_CONVERSION_PASS_RATE=0.60`
+- `QTBOT_PROMOTION_SLIPPAGE_STRESS_PCT_PER_SIDE=0.001`
+- `QTBOT_PROMOTION_ENTRY_THRESHOLD=0.60`
+- `QTBOT_PROMOTION_EXIT_THRESHOLD=0.48`
 
 ## Docker Usage
 

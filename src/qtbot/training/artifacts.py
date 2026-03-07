@@ -35,6 +35,17 @@ def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
         tmp_path.unlink(missing_ok=True)
 
 
+def write_text_atomic(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+    try:
+        with tmp_path.open("w", encoding="utf-8") as handle:
+            handle.write(content)
+        os.replace(tmp_path, path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
 def write_parquet_atomic(path: Path, frame: pd.DataFrame) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_name(f".{path.name}.tmp.{os.getpid()}")

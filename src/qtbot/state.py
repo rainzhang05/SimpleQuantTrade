@@ -1330,6 +1330,100 @@ class StateStore:
             ).fetchall()
             return [dict(row) for row in rows]
 
+    def upsert_promotion(
+        self,
+        *,
+        run_id: str,
+        bundle_id: str | None,
+        decision: str,
+        primary_scenario: str,
+        hard_failures: list[object],
+        soft_warnings: list[object],
+        omitted_symbols: list[str],
+        bundle_dir: str | None,
+        signature_ok: bool,
+    ) -> None:
+        now = utc_now_iso()
+        with self._connect() as conn:
+            self._apply_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO promotions (
+                    run_id, bundle_id, decision, primary_scenario, hard_failures_json,
+                    soft_warnings_json, omitted_symbols_json, bundle_dir, signature_ok, updated_at_utc
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    bundle_id = excluded.bundle_id,
+                    decision = excluded.decision,
+                    primary_scenario = excluded.primary_scenario,
+                    hard_failures_json = excluded.hard_failures_json,
+                    soft_warnings_json = excluded.soft_warnings_json,
+                    omitted_symbols_json = excluded.omitted_symbols_json,
+                    bundle_dir = excluded.bundle_dir,
+                    signature_ok = excluded.signature_ok,
+                    updated_at_utc = excluded.updated_at_utc
+                """,
+                (
+                    run_id,
+                    bundle_id,
+                    decision.strip().lower(),
+                    primary_scenario.strip().lower(),
+                    json.dumps(hard_failures, sort_keys=True),
+                    json.dumps(soft_warnings, sort_keys=True),
+                    json.dumps(sorted(item.strip().upper() for item in omitted_symbols), sort_keys=True),
+                    bundle_dir,
+                    int(bool(signature_ok)),
+                    now,
+                ),
+            )
+
+    def get_promotion(self, *, run_id: str) -> dict[str, object] | None:
+        if not self._db_path.exists():
+            return None
+        with self._connect() as conn:
+            self._apply_schema(conn)
+            row = conn.execute(
+                """
+                SELECT run_id, bundle_id, decision, primary_scenario, hard_failures_json,
+                       soft_warnings_json, omitted_symbols_json, bundle_dir, signature_ok, updated_at_utc
+                FROM promotions
+                WHERE run_id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            payload = dict(row)
+            payload["hard_failures"] = json.loads(str(payload.pop("hard_failures_json") or "[]"))
+            payload["soft_warnings"] = json.loads(str(payload.pop("soft_warnings_json") or "[]"))
+            payload["omitted_symbols"] = json.loads(str(payload.pop("omitted_symbols_json") or "[]"))
+            payload["signature_ok"] = bool(payload["signature_ok"])
+            return payload
+
+    def get_promotion_by_bundle(self, *, bundle_id: str) -> dict[str, object] | None:
+        if not self._db_path.exists():
+            return None
+        with self._connect() as conn:
+            self._apply_schema(conn)
+            row = conn.execute(
+                """
+                SELECT run_id, bundle_id, decision, primary_scenario, hard_failures_json,
+                       soft_warnings_json, omitted_symbols_json, bundle_dir, signature_ok, updated_at_utc
+                FROM promotions
+                WHERE bundle_id = ?
+                """,
+                (bundle_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            payload = dict(row)
+            payload["hard_failures"] = json.loads(str(payload.pop("hard_failures_json") or "[]"))
+            payload["soft_warnings"] = json.loads(str(payload.pop("soft_warnings_json") or "[]"))
+            payload["omitted_symbols"] = json.loads(str(payload.pop("omitted_symbols_json") or "[]"))
+            payload["signature_ok"] = bool(payload["signature_ok"])
+            return payload
+
     def insert_combined_build(
         self,
         *,
@@ -1697,6 +1791,28 @@ class StateStore:
             """
             CREATE INDEX IF NOT EXISTS idx_fold_metrics_run
             ON fold_metrics(run_id, fold_index, scenario, model_scope, split)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS promotions (
+                run_id TEXT PRIMARY KEY,
+                bundle_id TEXT,
+                decision TEXT NOT NULL,
+                primary_scenario TEXT NOT NULL,
+                hard_failures_json TEXT NOT NULL,
+                soft_warnings_json TEXT NOT NULL,
+                omitted_symbols_json TEXT NOT NULL,
+                bundle_dir TEXT,
+                signature_ok INTEGER NOT NULL DEFAULT 0,
+                updated_at_utc TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_promotions_bundle_id
+            ON promotions(bundle_id)
             """
         )
 

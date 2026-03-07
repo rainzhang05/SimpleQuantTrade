@@ -14,7 +14,7 @@ Primary authority:
 - Phase 4 (calibration research + weights): `implemented`
 - Phase 5 (training integration): `implemented`
 - Phase 6 (walk-forward trainer/evaluator): `implemented`
-- Phase 7 (promotion + bundle publishing): `pending`
+- Phase 7 (promotion + bundle publishing): `implemented`
 - Phase 8 (live ML inference integration): `pending`
 - Phase 9 (staging/cutover ML finalization): `pending`
 
@@ -25,24 +25,24 @@ Notes:
 ## 0.1) Current Checkpoint and Immediate Next Phase
 
 Current official checkpoint:
-- Data stack phases 1-6 are complete and operational.
-- Next official implementation phase is **Phase 7 (Promotion + Bundle Publishing)**.
-- Promotion, active-bundle management, and ML runtime cutover remain pending (phases 7-9).
+- Data stack phases 1-7 are complete and operational.
+- Next official implementation phase is **Phase 8 (Live ML Inference Integration)**.
+- Runtime inference and ML runtime cutover remain pending (phases 8-9).
 
-Phase 7 entry gate:
+Phase 8 entry gate:
 1. `data-status --dataset combined` shows coverage contract pass for the intended training window.
 2. `data-weight-status --timeframe 15m` shows recent monthly weights for train symbols.
 3. `build-snapshot --asof <ISO_TIME>` is reproducible over repeated runs with the same dataset hash.
 4. at least one `train` + `eval` run exists with persisted fold metrics under `runtime/research/training/<RUN_ID>/`.
+5. at least one `attribution` + `promote` decision exists, and active bundle integrity can be checked with `model-status`.
 
-Phase 7 implementation objective:
-- Gate trained runs deterministically and publish signed model bundles with atomic active-pointer updates.
+Phase 8 implementation objective:
+- Load the active promoted bundle at runtime and produce deterministic bar-close inference with observe-only fallback on readiness/integrity failure.
 
 ## 0.2) Step-by-Step Runway: Now -> Final Production ML
 
-1. Complete Phase 7 (promotion gates + bundle artifact writer + atomic active pointer).
-2. Complete Phase 8 (live runtime inference on bar close with deterministic blend + observe-only fallback).
-3. Complete Phase 9 (staging/cutover finalization, runbook evidence bundle, rollback drill).
+1. Complete Phase 8 (live runtime inference on bar close with deterministic blend + observe-only fallback).
+2. Complete Phase 9 (staging/cutover finalization, runbook evidence bundle, rollback drill).
 4. Enable ML live order path only after all phase gates pass and operator checklist evidence is archived.
 
 Required evidence package for final production readiness:
@@ -216,16 +216,21 @@ Active universe note:
 - end-to-end run creates deterministic fold metrics and source-mix diagnostics.
 - run metadata and fold metrics are persisted to `training_runs`, `training_folds`, and `fold_metrics`.
 
-## 8) Phase 7: Promotion Gates + Bundle Publishing
+## 8) Phase 7: Promotion Gates + Bundle Publishing (Implemented)
 
 ### Deliverables
+- deterministic coin attribution report (`coin_attribution.json` + `coin_attribution.md`).
 - promotion gate engine with hard/soft checks.
 - bundle writer with `signature.sha256` and atomic `LATEST` update.
 - rollback-safe active-bundle switching.
 - CLI contract implemented for:
+  - `qtbot attribution --run <RUN_ID>`
   - `qtbot promote --run <RUN_ID>`
   - `qtbot model-status`
   - `qtbot set-active-bundle <BUNDLE_ID>`
+- deployable bundle models are refit on all trainable rows allowed by the promoted primary scenario.
+- published bundles contain only the promoted primary scenario; alternate scenarios remain research artifacts.
+- per-coin models are promoted independently and may be omitted without blocking a passing global model.
 
 ### Hard gate minimums
 - `min_folds=12`
@@ -236,8 +241,16 @@ Active universe note:
 - conversion quality pass-rate threshold
 - combined coverage contract pass
 
+### Attribution bad-kind precedence
+- `sparse_history`
+- `cost_fragility`
+- `synthetic_fragility`
+- `weak_signal`
+
 ### Tests
+- deterministic attribution classification + report stability
 - gate pass/fail matrix
+- full-snapshot refit on promoted scenario rows
 - atomic pointer update
 - rollback integrity checks
 - signature validation failure path
@@ -245,6 +258,7 @@ Active universe note:
 ### Acceptance gate
 - promotion deterministically accepts/rejects same run.
 - bundle contents match roadmap contract (`manifest.json`, models, feature/threshold/cost files, signature).
+- `promotions` table records decisions, omitted symbols, bundle path, and signature status.
 
 ## 9) Phase 8: Live ML Inference Integration
 

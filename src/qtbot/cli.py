@@ -245,6 +245,40 @@ def build_parser() -> argparse.ArgumentParser:
         help="Training run ID under runtime/research/training/.",
     )
 
+    attribution_parser = subparsers.add_parser(
+        "attribution",
+        help="Generate deterministic coin attribution report for a training run.",
+    )
+    attribution_parser.add_argument(
+        "--run",
+        required=True,
+        help="Training run ID under runtime/research/training/.",
+    )
+
+    promote_parser = subparsers.add_parser(
+        "promote",
+        help="Apply deterministic promotion gates and publish a signed model bundle.",
+    )
+    promote_parser.add_argument(
+        "--run",
+        required=True,
+        help="Training run ID under runtime/research/training/.",
+    )
+
+    subparsers.add_parser(
+        "model-status",
+        help="Show active promoted bundle status and integrity.",
+    )
+
+    set_active_bundle_parser = subparsers.add_parser(
+        "set-active-bundle",
+        help="Atomically switch the active promoted bundle while paused or stopped.",
+    )
+    set_active_bundle_parser.add_argument(
+        "bundle_id",
+        help="Bundle ID under models/bundles/.",
+    )
+
     staging_parser = subparsers.add_parser(
         "staging-validate",
         help="Run M10 staging validation workflow and emit JSON report.",
@@ -404,6 +438,23 @@ def main(argv: list[str] | None = None) -> int:
         return _handle_eval(
             config=config,
             run_id=args.run,
+        )
+    if command == "attribution":
+        return _handle_attribution(
+            config=config,
+            run_id=args.run,
+        )
+    if command == "promote":
+        return _handle_promote(
+            config=config,
+            run_id=args.run,
+        )
+    if command == "model-status":
+        return _handle_model_status(config=config)
+    if command == "set-active-bundle":
+        return _handle_set_active_bundle(
+            config=config,
+            bundle_id=args.bundle_id,
         )
     if command == "staging-validate":
         return _handle_staging_validate(
@@ -849,6 +900,61 @@ def _handle_eval(
     return 0
 
 
+def _handle_attribution(
+    *,
+    config: RuntimeConfig,
+    run_id: str,
+) -> int:
+    try:
+        service = _make_attribution_service(config)
+        summary = service.generate(run_id=run_id)
+    except ValueError as exc:
+        print(f"Attribution failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(json.dumps(summary.to_payload(), indent=2, sort_keys=True))
+    return 0
+
+
+def _handle_promote(
+    *,
+    config: RuntimeConfig,
+    run_id: str,
+) -> int:
+    try:
+        service = _make_promotion_service(config)
+        summary = service.promote(run_id=run_id)
+    except ValueError as exc:
+        print(f"Promotion failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(json.dumps(summary.to_payload(), indent=2, sort_keys=True))
+    return 0 if summary.decision == "accepted" else 1
+
+
+def _handle_model_status(*, config: RuntimeConfig) -> int:
+    service = _make_promotion_service(config)
+    summary = service.model_status()
+    print(json.dumps(summary.to_payload(), indent=2, sort_keys=True))
+    return 0 if summary.integrity_status in {"ok", "missing"} else 1
+
+
+def _handle_set_active_bundle(
+    *,
+    config: RuntimeConfig,
+    bundle_id: str,
+) -> int:
+    try:
+        service = _make_promotion_service(config)
+        summary = service.set_active_bundle(bundle_id=bundle_id)
+    except ValueError as exc:
+        print(f"Set active bundle failed: {exc}", file=sys.stderr)
+        return 1
+
+    print(json.dumps(summary.to_payload(), indent=2, sort_keys=True))
+    return 0 if summary.integrity_status == "ok" else 1
+
+
 def _handle_staging_validate(
     *,
     config: RuntimeConfig,
@@ -980,6 +1086,24 @@ def _make_evaluation_service(config: RuntimeConfig):
     from qtbot.training import EvaluationService
 
     return EvaluationService(
+        config=config,
+        state_store=StateStore(config.state_db),
+    )
+
+
+def _make_attribution_service(config: RuntimeConfig):
+    from qtbot.training import AttributionService
+
+    return AttributionService(
+        config=config,
+        state_store=StateStore(config.state_db),
+    )
+
+
+def _make_promotion_service(config: RuntimeConfig):
+    from qtbot.training import PromotionService
+
+    return PromotionService(
         config=config,
         state_store=StateStore(config.state_db),
     )

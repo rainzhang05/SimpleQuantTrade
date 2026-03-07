@@ -9,7 +9,8 @@ Current rollout state:
 - Data foundation (multi-source + combined + calibration) is active.
 - Weighted training snapshot integration (Phase 5) is active.
 - Walk-forward training/evaluation (Phase 6) is active.
-- Bundle publishing and live ML runtime path must still follow `docs/PLAN.md` phases 7-9 in order.
+- Promotion gates + signed bundle publishing (Phase 7) are active.
+- Live ML runtime path must still follow `docs/PLAN.md` phases 8-9 in order.
 
 ## 1) Pre-Launch Readiness
 
@@ -32,8 +33,12 @@ Key artifacts:
 - `runtime/research/training/<RUN_ID>/feature_spec.json`
 - `runtime/research/training/<RUN_ID>/folds.json`
 - `runtime/research/training/<RUN_ID>/metrics.json`
+- `runtime/research/training/<RUN_ID>/coin_attribution.json`
+- `runtime/research/training/<RUN_ID>/coin_attribution.md`
 - `data/snapshots/<SNAPSHOT_ID>/manifest.json`
 - `data/snapshots/<SNAPSHOT_ID>/rows.parquet`
+- `models/bundles/<BUNDLE_ID>/manifest.json`
+- `models/bundles/LATEST`
 
 Local artifact rule:
 - `data/` is not version-controlled.
@@ -48,6 +53,9 @@ PYTHONPATH=src python3 -m qtbot data-weight-status --timeframe 15m
 PYTHONPATH=src python3 -m qtbot build-snapshot --asof <ISO_TIME> --timeframe 15m
 PYTHONPATH=src python3 -m qtbot train --snapshot <SNAPSHOT_ID> --folds 12 --universe V1
 PYTHONPATH=src python3 -m qtbot eval --run <RUN_ID>
+PYTHONPATH=src python3 -m qtbot attribution --run <RUN_ID>
+PYTHONPATH=src python3 -m qtbot promote --run <RUN_ID>
+PYTHONPATH=src python3 -m qtbot model-status
 PYTHONPATH=src python3 -m qtbot staging-validate --offline-only --budget 1000 --cadence-seconds 1 --min-loops 1 --timeout-seconds 30
 PYTHONPATH=src python3 -m qtbot cutover-checklist --offline-only --budget 250 --staging-max-age-hours 168
 ```
@@ -62,14 +70,13 @@ Expected outcomes:
 ## 2.1) Required Runway Before ML Live Activation
 
 This sequence is mandatory before enabling ML live order path:
-1. Complete Phase 7: promotion gates and signed bundle publication.
-2. Complete Phase 8: runtime inference in observe-only mode with deterministic outputs.
-3. Complete Phase 9: staging/cutover reports and rollback drill evidence.
+1. Complete Phase 8: runtime inference in observe-only mode with deterministic outputs.
+2. Complete Phase 9: staging/cutover reports and rollback drill evidence.
 
 Evidence required to move between steps:
 1. reproducible snapshot hash for fixed as-of time.
 2. persisted fold metrics and sensitivity outputs.
-3. promotion decision record + active bundle integrity pass.
+3. attribution report + promotion decision record + active bundle integrity pass.
 4. observe-only runtime logs with prediction + gating reasons.
 5. passing staging and cutover checklists from the same code/config revision.
 
@@ -150,6 +157,20 @@ Training readiness checks:
 - repeated `eval --run <RUN_ID>` rewrites identical metrics without duplicate DB rows
 - synthetic supervision may appear as `direct`, `carry_backward`, or `carry_forward`; symbols with no anchor remain continuity-only
 
+### 3.6 Attribution + bundle promotion
+```bash
+PYTHONPATH=src python3 -m qtbot attribution --run <RUN_ID>
+PYTHONPATH=src python3 -m qtbot promote --run <RUN_ID>
+PYTHONPATH=src python3 -m qtbot model-status
+```
+
+Promotion checks:
+- the run must already be `evaluated`
+- promotion uses the evaluated `primary_scenario`
+- the global model must pass hard gates
+- weak per-coin models may be omitted individually and are recorded in attribution + bundle manifest
+- promoted bundle models are full-snapshot refits, not reused fold models
+
 ## 4) Launch Procedure
 
 ### 4.1 Controlled startup
@@ -176,6 +197,7 @@ If readiness/integrity checks fail:
 
 Promotion:
 ```bash
+PYTHONPATH=src python3 -m qtbot attribution --run <RUN_ID>
 PYTHONPATH=src python3 -m qtbot promote --run <RUN_ID>
 PYTHONPATH=src python3 -m qtbot model-status
 ```
@@ -193,6 +215,7 @@ Training/promotion command flow from the current checkpoint:
 PYTHONPATH=src python3 -m qtbot build-snapshot --asof <ISO_TIME>
 PYTHONPATH=src python3 -m qtbot train --snapshot <SNAPSHOT_ID> --folds 12 --universe V1
 PYTHONPATH=src python3 -m qtbot eval --run <RUN_ID>
+PYTHONPATH=src python3 -m qtbot attribution --run <RUN_ID>
 PYTHONPATH=src python3 -m qtbot promote --run <RUN_ID>
 PYTHONPATH=src python3 -m qtbot model-status
 ```

@@ -88,17 +88,28 @@ class EvaluationServiceTests(unittest.TestCase):
             self.assertIn("ndax_only", first.metrics_summary)
 
             metrics = store.get_fold_metrics(run_id=run_id)
-            self.assertEqual(len(metrics), 5)
+            self.assertEqual(len(metrics), 10)
             weighted_all = next(
                 row
                 for row in metrics
                 if row["scenario"] == "weighted_combined"
                 and row["model_scope"] == "global"
                 and row["split"] == "all"
+                and row["symbol"] is None
             )
             self.assertEqual(weighted_all["trades"], 2)
             self.assertAlmostEqual(float(weighted_all["gross_return"]), 0.03)
             self.assertAlmostEqual(float(weighted_all["net_return"]), 0.022)
+            weighted_symbol = next(
+                row
+                for row in metrics
+                if row["scenario"] == "weighted_combined"
+                and row["model_scope"] == "global"
+                and row["split"] == "synthetic"
+                and row["symbol"] == "BTCCAD"
+            )
+            self.assertEqual(weighted_symbol["row_count"], 2)
+            self.assertEqual(weighted_symbol["trades"], 1)
 
             run_record = store.get_training_run(run_id=run_id)
             assert run_record is not None

@@ -401,6 +401,27 @@ class StateStoreTests(unittest.TestCase):
             self.assertEqual(len(fold_metrics), 1)
             self.assertEqual(fold_metrics[0]["scenario"], "weighted_combined")
 
+            store.upsert_promotion(
+                run_id="run123",
+                bundle_id="bundle123",
+                decision="accepted",
+                primary_scenario="weighted_combined",
+                hard_failures=[],
+                soft_warnings=[{"type": "per_coin_omitted", "count": 1}],
+                omitted_symbols=["ETHCAD"],
+                bundle_dir="/tmp/bundle123",
+                signature_ok=True,
+            )
+            promotion = store.get_promotion(run_id="run123")
+            assert promotion is not None
+            self.assertEqual(promotion["bundle_id"], "bundle123")
+            self.assertEqual(promotion["decision"], "accepted")
+            self.assertEqual(promotion["omitted_symbols"], ["ETHCAD"])
+
+            promotion_by_bundle = store.get_promotion_by_bundle(bundle_id="bundle123")
+            assert promotion_by_bundle is not None
+            self.assertEqual(promotion_by_bundle["run_id"], "run123")
+
     def test_insert_combined_build_supports_legacy_binance_rows_schema(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             db_path = Path(td) / "state.sqlite"

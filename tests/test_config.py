@@ -59,6 +59,13 @@ class RuntimeConfigTests(unittest.TestCase):
                         "QTBOT_CONVERSION_MAX_MEDIAN_APE=0.02",
                         "QTBOT_COMBINED_MAX_GAP_COUNT=1",
                         "QTBOT_COMBINED_MIN_COVERAGE=0.98",
+                        "QTBOT_PROMOTION_MIN_FOLDS=10",
+                        "QTBOT_PROMOTION_MIN_TRADES=250",
+                        "QTBOT_PROMOTION_MAX_DRAWDOWN=0.20",
+                        "QTBOT_PROMOTION_MIN_CONVERSION_PASS_RATE=0.70",
+                        "QTBOT_PROMOTION_SLIPPAGE_STRESS_PCT_PER_SIDE=0.0025",
+                        "QTBOT_PROMOTION_ENTRY_THRESHOLD=0.61",
+                        "QTBOT_PROMOTION_EXIT_THRESHOLD=0.47",
                     ]
                 ),
                 encoding="utf-8",
@@ -96,6 +103,13 @@ class RuntimeConfigTests(unittest.TestCase):
             self.assertEqual(cfg.conversion_max_median_ape, 0.02)
             self.assertEqual(cfg.combined_max_gap_count, 1)
             self.assertEqual(cfg.combined_min_coverage, 0.98)
+            self.assertEqual(cfg.promotion_min_folds, 10)
+            self.assertEqual(cfg.promotion_min_trades, 250)
+            self.assertEqual(cfg.promotion_max_drawdown, 0.20)
+            self.assertEqual(cfg.promotion_min_conversion_pass_rate, 0.70)
+            self.assertEqual(cfg.promotion_slippage_stress_pct_per_side, 0.0025)
+            self.assertEqual(cfg.promotion_entry_threshold, 0.61)
+            self.assertEqual(cfg.promotion_exit_threshold, 0.47)
             self.assertEqual(cfg.runtime_dir, (root / "test_runtime").resolve())
 
     def test_invalid_bool_raises_value_error(self) -> None:

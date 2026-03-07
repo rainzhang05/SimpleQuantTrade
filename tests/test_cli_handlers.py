@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import ExitStack
 import io
 import json
 from pathlib import Path
@@ -47,26 +48,47 @@ class CliHandlerTests(unittest.TestCase):
     def test_main_dispatches_all_commands(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             cfg = make_runtime_config(Path(td))
-            with (
-                mock.patch("qtbot.cli.load_runtime_config", return_value=cfg),
-                mock.patch("qtbot.cli._handle_start", return_value=0) as h_start,
-                mock.patch("qtbot.cli._handle_control_write", return_value=0) as h_control,
-                mock.patch("qtbot.cli._handle_status", return_value=0) as h_status,
-                mock.patch("qtbot.cli._handle_ndax_pairs", return_value=0) as h_pairs,
-                mock.patch("qtbot.cli._handle_ndax_candles", return_value=0) as h_candles,
-                mock.patch("qtbot.cli._handle_ndax_balances", return_value=0) as h_balances,
-                mock.patch("qtbot.cli._handle_ndax_check", return_value=0) as h_check,
-                mock.patch("qtbot.cli._handle_data_backfill", return_value=0) as h_backfill,
-                mock.patch("qtbot.cli._handle_data_status", return_value=0) as h_status_data,
-                mock.patch("qtbot.cli._handle_data_build_combined", return_value=0) as h_build_combined,
-                mock.patch("qtbot.cli._handle_data_calibrate_weights", return_value=0) as h_calibrate,
-                mock.patch("qtbot.cli._handle_data_weight_status", return_value=0) as h_weight_status,
-                mock.patch("qtbot.cli._handle_build_snapshot", return_value=0) as h_build_snapshot,
-                mock.patch("qtbot.cli._handle_train", return_value=0) as h_train,
-                mock.patch("qtbot.cli._handle_eval", return_value=0) as h_eval,
-                mock.patch("qtbot.cli._handle_staging_validate", return_value=0) as h_staging,
-                mock.patch("qtbot.cli._handle_cutover_checklist", return_value=0) as h_cutover,
-            ):
+            with ExitStack() as stack:
+                stack.enter_context(mock.patch("qtbot.cli.load_runtime_config", return_value=cfg))
+                h_start = stack.enter_context(mock.patch("qtbot.cli._handle_start", return_value=0))
+                h_control = stack.enter_context(mock.patch("qtbot.cli._handle_control_write", return_value=0))
+                h_status = stack.enter_context(mock.patch("qtbot.cli._handle_status", return_value=0))
+                h_pairs = stack.enter_context(mock.patch("qtbot.cli._handle_ndax_pairs", return_value=0))
+                h_candles = stack.enter_context(mock.patch("qtbot.cli._handle_ndax_candles", return_value=0))
+                h_balances = stack.enter_context(mock.patch("qtbot.cli._handle_ndax_balances", return_value=0))
+                h_check = stack.enter_context(mock.patch("qtbot.cli._handle_ndax_check", return_value=0))
+                h_backfill = stack.enter_context(mock.patch("qtbot.cli._handle_data_backfill", return_value=0))
+                h_status_data = stack.enter_context(mock.patch("qtbot.cli._handle_data_status", return_value=0))
+                h_build_combined = stack.enter_context(
+                    mock.patch("qtbot.cli._handle_data_build_combined", return_value=0)
+                )
+                h_calibrate = stack.enter_context(
+                    mock.patch("qtbot.cli._handle_data_calibrate_weights", return_value=0)
+                )
+                h_weight_status = stack.enter_context(
+                    mock.patch("qtbot.cli._handle_data_weight_status", return_value=0)
+                )
+                h_build_snapshot = stack.enter_context(
+                    mock.patch("qtbot.cli._handle_build_snapshot", return_value=0)
+                )
+                h_train = stack.enter_context(mock.patch("qtbot.cli._handle_train", return_value=0))
+                h_eval = stack.enter_context(mock.patch("qtbot.cli._handle_eval", return_value=0))
+                h_attribution = stack.enter_context(
+                    mock.patch("qtbot.cli._handle_attribution", return_value=0)
+                )
+                h_promote = stack.enter_context(mock.patch("qtbot.cli._handle_promote", return_value=0))
+                h_model_status = stack.enter_context(
+                    mock.patch("qtbot.cli._handle_model_status", return_value=0)
+                )
+                h_set_active_bundle = stack.enter_context(
+                    mock.patch("qtbot.cli._handle_set_active_bundle", return_value=0)
+                )
+                h_staging = stack.enter_context(
+                    mock.patch("qtbot.cli._handle_staging_validate", return_value=0)
+                )
+                h_cutover = stack.enter_context(
+                    mock.patch("qtbot.cli._handle_cutover_checklist", return_value=0)
+                )
                 self.assertEqual(cli.main(["start", "--budget", "100"]), 0)
                 h_start.assert_called_once()
 
@@ -198,6 +220,18 @@ class CliHandlerTests(unittest.TestCase):
 
                 self.assertEqual(cli.main(["eval", "--run", "run123"]), 0)
                 h_eval.assert_called_once()
+
+                self.assertEqual(cli.main(["attribution", "--run", "run123"]), 0)
+                h_attribution.assert_called_once()
+
+                self.assertEqual(cli.main(["promote", "--run", "run123"]), 0)
+                h_promote.assert_called_once()
+
+                self.assertEqual(cli.main(["model-status"]), 0)
+                h_model_status.assert_called_once()
+
+                self.assertEqual(cli.main(["set-active-bundle", "bundle123"]), 0)
+                h_set_active_bundle.assert_called_once()
 
                 self.assertEqual(cli.main(["staging-validate", "--offline-only"]), 0)
                 h_staging.assert_called_once()
@@ -663,6 +697,152 @@ class CliHandlerTests(unittest.TestCase):
                 )
             self.assertEqual(code, 1)
             self.assertIn("Evaluation failed", err)
+
+    def test_handle_attribution(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = make_runtime_config(Path(td))
+            summary = mock.Mock()
+            summary.to_payload.return_value = {
+                "run_id": "run123",
+                "primary_scenario": "weighted_combined",
+                "status": "attributed",
+            }
+            service = mock.Mock()
+            service.generate.return_value = summary
+            with mock.patch("qtbot.cli._make_attribution_service", return_value=service):
+                code, out, err = _capture_output(
+                    cli._handle_attribution,
+                    config=cfg,
+                    run_id="run123",
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(err, "")
+            payload = json.loads(out)
+            self.assertEqual(payload["status"], "attributed")
+            service.generate.assert_called_once_with(run_id="run123")
+
+            service.generate.side_effect = ValueError("bad run")
+            with mock.patch("qtbot.cli._make_attribution_service", return_value=service):
+                code, _, err = _capture_output(
+                    cli._handle_attribution,
+                    config=cfg,
+                    run_id="run123",
+                )
+            self.assertEqual(code, 1)
+            self.assertIn("Attribution failed", err)
+
+    def test_handle_promote_model_status_and_set_active_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = make_runtime_config(Path(td))
+            service = mock.Mock()
+
+            accepted = mock.Mock()
+            accepted.to_payload.return_value = {
+                "run_id": "run123",
+                "bundle_id": "bundle123",
+                "decision": "accepted",
+                "status": "promoted",
+            }
+            accepted.decision = "accepted"
+            service.promote.return_value = accepted
+            with mock.patch("qtbot.cli._make_promotion_service", return_value=service):
+                code, out, err = _capture_output(
+                    cli._handle_promote,
+                    config=cfg,
+                    run_id="run123",
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(err, "")
+            payload = json.loads(out)
+            self.assertEqual(payload["decision"], "accepted")
+            service.promote.assert_called_once_with(run_id="run123")
+
+            rejected = mock.Mock()
+            rejected.to_payload.return_value = {
+                "run_id": "run123",
+                "bundle_id": None,
+                "decision": "rejected",
+                "status": "rejected",
+            }
+            rejected.decision = "rejected"
+            service.promote.reset_mock()
+            service.promote.return_value = rejected
+            with mock.patch("qtbot.cli._make_promotion_service", return_value=service):
+                code, _, err = _capture_output(
+                    cli._handle_promote,
+                    config=cfg,
+                    run_id="run123",
+                )
+            self.assertEqual(code, 1)
+            self.assertEqual(err, "")
+
+            service.promote.side_effect = ValueError("bad promote")
+            with mock.patch("qtbot.cli._make_promotion_service", return_value=service):
+                code, _, err = _capture_output(
+                    cli._handle_promote,
+                    config=cfg,
+                    run_id="run123",
+                )
+            self.assertEqual(code, 1)
+            self.assertIn("Promotion failed", err)
+
+            status_summary = mock.Mock()
+            status_summary.to_payload.return_value = {
+                "bundle_id": "bundle123",
+                "integrity_status": "ok",
+                "status": "active",
+            }
+            status_summary.integrity_status = "ok"
+            service = mock.Mock()
+            service.model_status.return_value = status_summary
+            with mock.patch("qtbot.cli._make_promotion_service", return_value=service):
+                code, out, err = _capture_output(cli._handle_model_status, config=cfg)
+            self.assertEqual(code, 0)
+            self.assertEqual(err, "")
+            self.assertEqual(json.loads(out)["bundle_id"], "bundle123")
+
+            invalid_status = mock.Mock()
+            invalid_status.to_payload.return_value = {
+                "bundle_id": "bundle123",
+                "integrity_status": "invalid",
+                "status": "invalid",
+            }
+            invalid_status.integrity_status = "invalid"
+            service.model_status.return_value = invalid_status
+            with mock.patch("qtbot.cli._make_promotion_service", return_value=service):
+                code, _, err = _capture_output(cli._handle_model_status, config=cfg)
+            self.assertEqual(code, 1)
+            self.assertEqual(err, "")
+
+            set_summary = mock.Mock()
+            set_summary.to_payload.return_value = {
+                "bundle_id": "bundle123",
+                "integrity_status": "ok",
+                "status": "active",
+            }
+            set_summary.integrity_status = "ok"
+            service = mock.Mock()
+            service.set_active_bundle.return_value = set_summary
+            with mock.patch("qtbot.cli._make_promotion_service", return_value=service):
+                code, out, err = _capture_output(
+                    cli._handle_set_active_bundle,
+                    config=cfg,
+                    bundle_id="bundle123",
+                )
+            self.assertEqual(code, 0)
+            self.assertEqual(err, "")
+            self.assertEqual(json.loads(out)["integrity_status"], "ok")
+            service.set_active_bundle.assert_called_once_with(bundle_id="bundle123")
+
+            service.set_active_bundle.side_effect = ValueError("bad bundle")
+            with mock.patch("qtbot.cli._make_promotion_service", return_value=service):
+                code, _, err = _capture_output(
+                    cli._handle_set_active_bundle,
+                    config=cfg,
+                    bundle_id="bundle123",
+                )
+            self.assertEqual(code, 1)
+            self.assertIn("Set active bundle failed", err)
 
     def test_handle_start_and_main_dispatch(self) -> None:
         with tempfile.TemporaryDirectory() as td:

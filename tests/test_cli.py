@@ -211,6 +211,26 @@ class CliTests(unittest.TestCase):
         self.assertEqual(args.command, "eval")
         self.assertEqual(args.run, "20260305T120000Z_run")
 
+    def test_parser_accepts_attribution_flags(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["attribution", "--run", "run123"])
+        self.assertEqual(args.command, "attribution")
+        self.assertEqual(args.run, "run123")
+
+    def test_parser_accepts_promote_flags(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["promote", "--run", "run123"])
+        self.assertEqual(args.command, "promote")
+        self.assertEqual(args.run, "run123")
+
+    def test_parser_accepts_model_status_and_set_active_bundle(self) -> None:
+        parser = build_parser()
+        args = parser.parse_args(["model-status"])
+        self.assertEqual(args.command, "model-status")
+        args = parser.parse_args(["set-active-bundle", "bundle-123"])
+        self.assertEqual(args.command, "set-active-bundle")
+        self.assertEqual(args.bundle_id, "bundle-123")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -62,6 +62,13 @@ def make_runtime_config(tmp_path: Path, **overrides) -> RuntimeConfig:
         valid_window_months=1,
         train_step_months=1,
         fee_pct_per_side=0.002,
+        promotion_min_folds=12,
+        promotion_min_trades=200,
+        promotion_max_drawdown=0.25,
+        promotion_min_conversion_pass_rate=0.60,
+        promotion_slippage_stress_pct_per_side=0.001,
+        promotion_entry_threshold=0.60,
+        promotion_exit_threshold=0.48,
     )
     if overrides:
         return replace(cfg, **overrides)

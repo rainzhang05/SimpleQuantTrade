@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-import lightgbm as lgb
 import pandas as pd
 
 from qtbot.config import RuntimeConfig
@@ -14,11 +13,15 @@ from qtbot.training.artifacts import build_run_id, ensure_run_dir, write_json_at
 from qtbot.training.feature_builder import FeatureBuilder
 from qtbot.training.feature_spec import FEATURE_COLUMNS, feature_spec_payload
 from qtbot.training.folds import FoldDefinition, build_walk_forward_folds, month_mask
-
-
-_SCENARIOS = ("ndax_only", "weighted_combined")
-_PER_COIN_MIN_TRAIN_ROWS = 1000
-_PER_COIN_MIN_VALID_ROWS = 100
+from qtbot.training.modeling import (
+    SCENARIOS,
+    ensure_binary_labels,
+    fit_model,
+    per_coin_skip_reason,
+    prediction_frame,
+    rows_for_scenario,
+    scenario_skip_reason,
+)
 
 
 @dataclass(frozen=True)
@@ -94,7 +97,7 @@ class TrainingService:
                 "per_coin_models": 0,
                 "skip_reasons": [],
             }
-            for scenario in _SCENARIOS
+            for scenario in SCENARIOS
         }
         summary = TrainingSummary(
             run_id=run_id,
@@ -158,16 +161,16 @@ class TrainingService:
             fold_predictions_dir = run_dir / "predictions" / f"fold_{fold.fold_index:02d}"
             fold_source_mix = _fold_source_mix(train_rows=fold_train, valid_rows=fold_valid)
             per_coin_skip_reasons: dict[str, dict[str, str]] = {}
-            for scenario in _SCENARIOS:
-                scenario_skip_reason = _scenario_skip_reason(
+            for scenario in SCENARIOS:
+                skip_reason = scenario_skip_reason(
                     train_rows=fold_train,
                     valid_rows=fold_valid,
                     scenario=scenario,
                 )
-                if scenario_skip_reason is not None:
+                if skip_reason is not None:
                     if scenario == "weighted_combined":
                         raise ValueError(
-                            f"fold={fold.fold_index} scenario={scenario} {scenario_skip_reason}"
+                            f"fold={fold.fold_index} scenario={scenario} {skip_reason}"
                         )
                     scenario_status[scenario]["folds_skipped"] = int(scenario_status[scenario]["folds_skipped"]) + 1
                     cast_skip_reasons = scenario_status[scenario]["skip_reasons"]
@@ -175,7 +178,7 @@ class TrainingService:
                         cast_skip_reasons.append(
                             {
                                 "fold_index": fold.fold_index,
-                                "reason": scenario_skip_reason,
+                                "reason": skip_reason,
                             }
                         )
                     continue
@@ -223,7 +226,7 @@ class TrainingService:
             folds_built=len(fold_defs),
             status="trained",
         )
-        for scenario in _SCENARIOS:
+        for scenario in SCENARIOS:
             folds_completed = int(scenario_status[scenario]["folds_completed"])
             folds_skipped = int(scenario_status[scenario]["folds_skipped"])
             if folds_completed == len(fold_defs):
@@ -271,12 +274,12 @@ class TrainingService:
         run_id: str,
         snapshot_id: str,
     ) -> _ScenarioTrainingResult:
-        scenario_train = _rows_for_scenario(rows=train_rows, scenario=scenario)
-        scenario_valid = _rows_for_scenario(rows=valid_rows, scenario=scenario)
-        _ensure_binary_labels(rows=scenario_train, context=f"fold={fold.fold_index} scenario={scenario} train")
-        _ensure_binary_labels(rows=scenario_valid, context=f"fold={fold.fold_index} scenario={scenario} valid")
+        scenario_train = rows_for_scenario(rows=train_rows, scenario=scenario)
+        scenario_valid = rows_for_scenario(rows=valid_rows, scenario=scenario)
+        ensure_binary_labels(rows=scenario_train, context=f"fold={fold.fold_index} scenario={scenario} train")
+        ensure_binary_labels(rows=scenario_valid, context=f"fold={fold.fold_index} scenario={scenario} valid")
 
-        global_model = _fit_model(
+        global_model = fit_model(
             rows=scenario_train,
             sample_weight_column=(None if scenario == "ndax_only" else "supervised_row_weight"),
             seed=self._config.train_seed,
@@ -286,7 +289,7 @@ class TrainingService:
         global_model.booster_.save_model(str(global_model_path))
 
         prediction_frames = [
-            _prediction_frame(
+            prediction_frame(
                 model=global_model,
                 rows=scenario_valid,
                 run_id=run_id,
@@ -303,11 +306,11 @@ class TrainingService:
         for symbol in sorted(scenario_valid["symbol"].unique()):
             train_symbol_rows = scenario_train.loc[scenario_train["symbol"] == symbol].reset_index(drop=True)
             valid_symbol_rows = scenario_valid.loc[scenario_valid["symbol"] == symbol].reset_index(drop=True)
-            skip_reason = _per_coin_skip_reason(train_rows=train_symbol_rows, valid_rows=valid_symbol_rows)
+            skip_reason = per_coin_skip_reason(train_rows=train_symbol_rows, valid_rows=valid_symbol_rows)
             if skip_reason is not None:
                 per_coin_skip_reasons[symbol] = skip_reason
                 continue
-            per_coin_model = _fit_model(
+            per_coin_model = fit_model(
                 rows=train_symbol_rows,
                 sample_weight_column=(None if scenario == "ndax_only" else "supervised_row_weight"),
                 seed=self._config.train_seed,
@@ -316,7 +319,7 @@ class TrainingService:
             per_coin_path.parent.mkdir(parents=True, exist_ok=True)
             per_coin_model.booster_.save_model(str(per_coin_path))
             prediction_frames.append(
-                _prediction_frame(
+                prediction_frame(
                     model=per_coin_model,
                     rows=valid_symbol_rows,
                     run_id=run_id,
@@ -361,111 +364,6 @@ class TrainingService:
             "folds": [fold.to_payload() for fold in folds],
         }
         write_json_atomic(run_dir / "manifest.json", payload)
-
-
-def _rows_for_scenario(*, rows: pd.DataFrame, scenario: str) -> pd.DataFrame:
-    if scenario == "ndax_only":
-        return rows.loc[rows["source"] == "ndax"].reset_index(drop=True)
-    if scenario == "weighted_combined":
-        return rows.reset_index(drop=True)
-    raise ValueError(f"unsupported training scenario: {scenario}")
-
-
-def _scenario_skip_reason(*, train_rows: pd.DataFrame, valid_rows: pd.DataFrame, scenario: str) -> str | None:
-    scenario_train = _rows_for_scenario(rows=train_rows, scenario=scenario)
-    scenario_valid = _rows_for_scenario(rows=valid_rows, scenario=scenario)
-    if scenario_train.empty:
-        return "train has no rows"
-    if scenario_valid.empty:
-        return "valid has no rows"
-    train_labels = {int(value) for value in scenario_train["y"].unique()}
-    if train_labels != {0, 1}:
-        return f"train must contain both classes, observed={sorted(train_labels)}"
-    valid_labels = {int(value) for value in scenario_valid["y"].unique()}
-    if valid_labels != {0, 1}:
-        return f"valid must contain both classes, observed={sorted(valid_labels)}"
-    return None
-
-
-def _ensure_binary_labels(*, rows: pd.DataFrame, context: str) -> None:
-    if rows.empty:
-        raise ValueError(f"{context} has no rows")
-    labels = {int(value) for value in rows["y"].unique()}
-    if labels != {0, 1}:
-        raise ValueError(f"{context} must contain both classes, observed={sorted(labels)}")
-
-
-def _fit_model(*, rows: pd.DataFrame, sample_weight_column: str | None, seed: int) -> lgb.LGBMClassifier:
-    model = lgb.LGBMClassifier(
-        objective="binary",
-        learning_rate=0.05,
-        n_estimators=200,
-        num_leaves=31,
-        min_child_samples=50,
-        subsample=1.0,
-        colsample_bytree=1.0,
-        reg_alpha=0.0,
-        reg_lambda=0.0,
-        random_state=seed,
-        deterministic=True,
-        force_col_wise=True,
-        n_jobs=1,
-        verbosity=-1,
-    )
-    sample_weight = None
-    if sample_weight_column is not None:
-        sample_weight = rows[sample_weight_column].astype("float64").to_numpy()
-    model.fit(
-        rows[FEATURE_COLUMNS].astype("float32"),
-        rows["y"].astype("int32").to_numpy(),
-        sample_weight=sample_weight,
-    )
-    return model
-
-
-def _prediction_frame(
-    *,
-    model: lgb.LGBMClassifier,
-    rows: pd.DataFrame,
-    run_id: str,
-    snapshot_id: str,
-    fold_index: int,
-    scenario: str,
-    model_scope: str,
-    model_symbol: str | None,
-) -> pd.DataFrame:
-    probability = model.predict_proba(rows[FEATURE_COLUMNS].astype("float32"))[:, 1]
-    return pd.DataFrame(
-        {
-            "run_id": run_id,
-            "snapshot_id": snapshot_id,
-            "fold_index": int(fold_index),
-            "scenario": scenario,
-            "model_scope": model_scope,
-            "model_symbol": model_symbol,
-            "symbol": rows["symbol"].astype(str).to_numpy(),
-            "timestamp_ms": rows["timestamp_ms"].astype("int64").to_numpy(),
-            "source": rows["source"].astype(str).to_numpy(),
-            "y": rows["y"].astype("int8").to_numpy(),
-            "forward_return": rows["forward_return"].astype("float64").to_numpy(),
-            "supervised_row_weight": rows["supervised_row_weight"].astype("float64").to_numpy(),
-            "probability": probability.astype("float64"),
-        }
-    )
-
-
-def _per_coin_skip_reason(*, train_rows: pd.DataFrame, valid_rows: pd.DataFrame) -> str | None:
-    if len(train_rows) < _PER_COIN_MIN_TRAIN_ROWS:
-        return f"train_rows_lt_{_PER_COIN_MIN_TRAIN_ROWS}"
-    if len(valid_rows) < _PER_COIN_MIN_VALID_ROWS:
-        return f"valid_rows_lt_{_PER_COIN_MIN_VALID_ROWS}"
-    train_labels = {int(value) for value in train_rows["y"].unique()}
-    if train_labels != {0, 1}:
-        return "train_missing_class"
-    valid_labels = {int(value) for value in valid_rows["y"].unique()}
-    if valid_labels != {0, 1}:
-        return "valid_missing_class"
-    return None
 
 
 def _fold_source_mix(*, train_rows: pd.DataFrame, valid_rows: pd.DataFrame) -> dict[str, int]:

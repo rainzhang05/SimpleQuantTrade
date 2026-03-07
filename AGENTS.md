@@ -128,6 +128,12 @@ Phase 6 training rule:
 - `ndax_only` is a benchmark scenario and may be partial/skipped when requested folds do not have enough NDAX-only train/validate supervision
 - skipped NDAX benchmark folds must be recorded deterministically in run metadata, not hidden
 
+Phase 7 promotion rule:
+- attribution is a first-class artifact and must remain deterministic for the same evaluated run inputs
+- promotion publishes only the evaluated `primary_scenario` into runtime bundles; alternate scenarios remain research artifacts
+- per-coin models may be omitted individually when attribution/gates fail; a passing global model must not be blocked solely by weak per-coin models
+- bundle contents must be signed, and active bundle switching is allowed only when paused/stopped and only to a signature-valid bundle
+
 ## 8) When to Ask the User
 
 Ask for clarification when:

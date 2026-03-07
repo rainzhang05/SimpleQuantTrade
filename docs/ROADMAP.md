@@ -51,13 +51,13 @@ Legacy fixed-rule 1m EMA/ATR behavior is archived at:
 - Runtime controls/logs: `runtime/control.json`, `runtime/logs/`
 - `data/` is a local-only artifact tree and is not version-controlled; each machine must build or refresh it locally through the CLI pipeline.
 
-### 1.2 Training layer (Phase 6 training/evaluation implemented; later phases remain)
+### 1.2 Training layer (Phase 7 promotion/bundles implemented; runtime inference remains phased)
 - Sealed snapshot builder with deterministic dataset hash.
 - Deterministic feature pipeline (50-80 features).
 - Walk-forward orchestrator.
 - LightGBM global + per-coin trainers.
-- Cost-aware evaluator + promotion gates.
-- Bundle publisher with integrity signature.
+- Cost-aware evaluator + deterministic coin attribution.
+- Promotion gates + bundle publisher with integrity signature.
 
 ### 1.3 Inference layer (phased)
 - Runtime loads active promoted bundle from `models/bundles/LATEST`.
@@ -87,6 +87,8 @@ Optional files:
 - `dataset_hash`, `feature_spec_hash`
 - `training_window`, `walk_forward`, `lgbm_params`
 - `metrics_summary`
+- `run_id`, `primary_scenario`
+- `included_per_coin_symbols`, `omitted_symbols`
 
 Active pointer contract:
 - `models/bundles/LATEST` is updated atomically.
@@ -250,7 +252,7 @@ Snapshot hash contract:
 - row order is deterministic: Universe V1 symbol order, then ascending `timestamp_ms`
 - manifest includes per-symbol parity checks and source-mix audits
 
-## 8) Training, Evaluation, Promotion
+## 8) Training, Evaluation, Attribution, Promotion
 
 ### 8.1 Models
 - LightGBM global + per-coin.
@@ -267,6 +269,7 @@ Snapshot hash contract:
 - CLI:
   - `qtbot train --snapshot <SNAPSHOT_ID> --folds <N> --universe V1`
   - `qtbot eval --run <RUN_ID>`
+  - `qtbot attribution --run <RUN_ID>`
 - Scenario execution rule:
   - `weighted_combined` is required and must train on every built fold
   - `ndax_only` is best-effort and may be partial/skipped on folds that lack NDAX train/validate rows or both classes
@@ -277,6 +280,8 @@ Training artifact layout:
 - `runtime/research/training/<RUN_ID>/feature_spec.json`
 - `runtime/research/training/<RUN_ID>/folds.json`
 - `runtime/research/training/<RUN_ID>/metrics.json`
+- `runtime/research/training/<RUN_ID>/coin_attribution.json`
+- `runtime/research/training/<RUN_ID>/coin_attribution.md`
 - `runtime/research/training/<RUN_ID>/predictions/fold_<NN>/<scenario>.parquet`
 - `runtime/research/training/<RUN_ID>/models/global/<scenario>/fold_<NN>.txt`
 - `runtime/research/training/<RUN_ID>/models/per_coin/<SYMBOL>/<scenario>/fold_<NN>.txt`
@@ -296,7 +301,25 @@ Feature contract (implemented v1):
 - `min_folds=12`
 - `min_trades=200`
 - `max_drawdown=25%`
+- `min_conversion_pass_rate=0.60`
+- `slippage_stress_pct_per_side=0.001`
 - slippage stress must remain net positive
+
+### 8.5 Promotion/bundle contract (implemented)
+- Promotion CLI:
+  - `qtbot promote --run <RUN_ID>`
+  - `qtbot model-status`
+  - `qtbot set-active-bundle <BUNDLE_ID>`
+- Promotion selects the evaluated `primary_scenario` only.
+- Bundle models are refit on all trainable rows allowed by the promoted scenario; fold models are research artifacts and are not published directly.
+- Per-coin models are optional:
+  - passing global metrics can still promote a bundle
+  - weak per-coin models are omitted individually based on attribution + promotion gates
+- Attribution bad-kind precedence for per-coin omission:
+  - `sparse_history`
+  - `cost_fragility`
+  - `synthetic_fragility`
+  - `weak_signal`
 
 ## 9) Live Inference and Trading Logic (Phased)
 
@@ -366,8 +389,13 @@ Defaults:
 ### 11.4 Training/model commands
 - `qtbot train --snapshot <SNAPSHOT_ID> --folds <N> --universe V1`
 - `qtbot eval --run <RUN_ID>`
-- `promote`
-- `model-status`, `predict`, `set-active-bundle`
+- `qtbot attribution --run <RUN_ID>`
+- `qtbot promote --run <RUN_ID>`
+- `qtbot model-status`
+- `qtbot set-active-bundle <BUNDLE_ID>`
+
+### 11.5 Planned runtime inference command
+- `qtbot predict --symbol <SYM> --at latest`
 
 ## 12) SQLite Schema Contract
 
@@ -384,7 +412,7 @@ Retained runtime tables:
 Active ML training tables:
 - `training_runs`, `training_folds`, `fold_metrics`
 
-Planned promotion/runtime tables:
+Active promotion/runtime tables:
 - `promotions`
 
 Schema rules:
@@ -416,6 +444,13 @@ Required data variables:
 - `QTBOT_VALID_WINDOW_MONTHS=1`
 - `QTBOT_TRAIN_STEP_MONTHS=1`
 - `QTBOT_FEE_PCT_PER_SIDE` defaults to `QTBOT_TAKER_FEE_RATE` when unset
+- `QTBOT_PROMOTION_MIN_FOLDS=12`
+- `QTBOT_PROMOTION_MIN_TRADES=200`
+- `QTBOT_PROMOTION_MAX_DRAWDOWN=0.25`
+- `QTBOT_PROMOTION_MIN_CONVERSION_PASS_RATE=0.60`
+- `QTBOT_PROMOTION_SLIPPAGE_STRESS_PCT_PER_SIDE=0.001`
+- `QTBOT_PROMOTION_ENTRY_THRESHOLD=0.60`
+- `QTBOT_PROMOTION_EXIT_THRESHOLD=0.48`
 
 Core trading/risk defaults remain in `src/qtbot/config.py`.
 
@@ -451,18 +486,15 @@ I. Staging/cutover ML readiness
 ## 15) Current Program Status and Next-Step Gates
 
 Current status:
-- Milestones A-F are implemented (data ingestion, combined build, calibration weighting, weighted snapshot integration, walk-forward training/evaluation).
-- Milestones G-I remain the official implementation runway to production ML.
-- The immediate next milestone is **G (Promotion + bundle publisher)**.
+- Milestones A-G are implemented (data ingestion, combined build, calibration weighting, weighted snapshot integration, walk-forward training/evaluation, attribution, promotion, signed bundle publishing).
+- Milestones H-I remain the official implementation runway to production ML.
+- The immediate next milestone is **H (Live inference integration)**.
 
 Mandatory gate sequence from current state to production:
-1. **G: Promotion + bundle publisher**
-   - Entry: evaluator outputs complete and gate inputs persisted.
-   - Exit: deterministic promote accept/reject + atomic `LATEST` update + signature verification.
-2. **H: Live inference integration**
+1. **H: Live inference integration**
    - Entry: at least one promoted bundle and passing model integrity checks.
    - Exit: bar-close deterministic predictions with observe-only safety fallback.
-3. **I: Staging/cutover readiness**
+2. **I: Staging/cutover readiness**
    - Entry: live inference path stable in observe-only.
    - Exit: staging + cutover reports pass with rollback drill evidence.
 
